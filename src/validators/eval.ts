@@ -7,6 +7,7 @@ import type {
   RepoIndex,
   DepGraph,
   RouteGraph,
+  ApiGraph,
 } from "../types/index.js";
 import { readJson, getGitCommit } from "../core/utils.js";
 
@@ -302,6 +303,87 @@ export function validateRouteGraph(
 }
 
 /**
+ * Validate that an API graph is well-formed
+ */
+export function validateApiGraph(
+  graph: ApiGraph,
+  options: EvalOptions
+): EvalResult {
+  const issues: EvalIssue[] = [];
+  const repoRoot = options.root || process.cwd();
+
+  // Check version
+  if (!graph.version) {
+    issues.push({
+      severity: "error",
+      code: "MISSING_VERSION",
+      message: "Graph is missing version field",
+    });
+  }
+
+  // Check all endpoint files exist
+  for (const endpoint of graph.endpoints) {
+    const absolutePath = path.join(repoRoot, endpoint.file);
+    if (!fs.existsSync(absolutePath)) {
+      issues.push({
+        severity: "error",
+        code: "ENDPOINT_FILE_NOT_FOUND",
+        message: `Endpoint file not found: ${endpoint.file}`,
+        file: endpoint.file,
+      });
+    }
+  }
+
+  // Check router endpoint references
+  const endpointIds = new Set(graph.endpoints.map((e) => e.id));
+  for (const router of graph.routers) {
+    for (const epId of router.endpoints) {
+      if (!endpointIds.has(epId)) {
+        issues.push({
+          severity: "warning",
+          code: "INVALID_ROUTER_ENDPOINT",
+          message: `Router ${router.name} references non-existent endpoint: ${epId}`,
+          file: router.file,
+        });
+      }
+    }
+
+    // Check router file exists
+    const absolutePath = path.join(repoRoot, router.file);
+    if (!fs.existsSync(absolutePath)) {
+      issues.push({
+        severity: "error",
+        code: "ROUTER_FILE_NOT_FOUND",
+        message: `Router file not found: ${router.file}`,
+        file: router.file,
+      });
+    }
+  }
+
+  // Check stats consistency
+  if (graph.stats.totalEndpoints !== graph.endpoints.length) {
+    issues.push({
+      severity: "warning",
+      code: "STATS_MISMATCH",
+      message: `Endpoint count mismatch: stats says ${graph.stats.totalEndpoints}, actual is ${graph.endpoints.length}`,
+    });
+  }
+
+  return {
+    version: EVAL_VERSION,
+    generatedAt: new Date().toISOString(),
+    target: "ApiGraph",
+    passed: issues.filter((i) => i.severity === "error").length === 0,
+    issues,
+    stats: {
+      errors: issues.filter((i) => i.severity === "error").length,
+      warnings: issues.filter((i) => i.severity === "warning").length,
+      infos: issues.filter((i) => i.severity === "info").length,
+    },
+  };
+}
+
+/**
  * Validate an artifact file (auto-detect type)
  */
 export async function validateArtifact(options: EvalOptions): Promise<EvalResult> {
@@ -339,6 +421,10 @@ export async function validateArtifact(options: EvalOptions): Promise<EvalResult
 
   if ("routes" in data && "layouts" in data && "framework" in data) {
     return validateRouteGraph(data as unknown as RouteGraph, options);
+  }
+
+  if ("endpoints" in data && "routers" in data) {
+    return validateApiGraph(data as unknown as ApiGraph, options);
   }
 
   return {
