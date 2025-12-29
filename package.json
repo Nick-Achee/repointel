@@ -1,0 +1,80 @@
+{
+  "name": "repointel",
+  "version": "0.2.0",
+  "description": "Repo intelligence CLI - architecture graphs, context slices, and LLM-ready artifacts",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "bin": {
+    "repointel": "dist/bin/cli.js"
+  },
+  "exports": {
+    ".": {
+      "import": "./dist/index.js",
+      "types": "./dist/index.d.ts"
+    }
+  },
+  "scripts": {
+    "build": "tsup",
+    "dev": "tsx src/bin/cli.ts",
+    "test": "vitest",
+    "test:run": "vitest run",
+    "lint": "eslint src --ext .ts",
+    "prepublishOnly": "npm run build"
+  },
+  "files": [
+    "dist",
+    "templates",
+    ".claude"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/nicholasgriffintn/repointel.git"
+  },
+  "bugs": {
+    "url": "https://github.com/nicholasgriffintn/repointel/issues"
+  },
+  "homepage": "https://github.com/nicholasgriffintn/repointel#readme",
+  "engines": {
+    "node": ">=18"
+  },
+  "keywords": [
+    "cli",
+    "architecture",
+    "llm",
+    "code-analysis",
+    "nextjs",
+    "typescript",
+    "dependency-graph",
+    "context",
+    "convex",
+    "mermaid",
+    "claude",
+    "ai",
+    "spec",
+    "audit"
+  ],
+  "author": "Nick",
+  "license": "MIT",
+  "dependencies": {
+    "@inquirer/prompts": "8.1.0",
+    "commander": "^12.1.0",
+    "fast-glob": "^3.3.2",
+    "picocolors": "^1.1.1"
+  },
+  "devDependencies": {
+    "@types/node": "^20.17.0",
+    "tsup": "^8.3.5",
+    "tsx": "^4.19.2",
+    "typescript": "^5.6.3",
+    "vitest": "^2.1.4"
+  },
+  "peerDependencies": {
+    "typescript": ">=5.0.0"
+  },
+  "peerDependenciesMeta": {
+    "typescript": {
+      "optional": true
+    }
+  }
+}
