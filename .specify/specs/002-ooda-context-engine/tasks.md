@@ -40,7 +40,7 @@
 
 - [x] Code review
 - [x] Update README with constitution best practices
-- [ ] Merge to main
+- [x] Merge to main
 
 ## Notes
 
