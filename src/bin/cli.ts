@@ -127,6 +127,8 @@ program
   .option("-r, --refresh", "Force re-scan and re-orient")
   .option("-f, --focus <id>", "Focus on a specific feature (by number, ID, or name)")
   .option("-o, --output <dir>", "Output directory for decision context")
+  .option("-y, --yes", "Non-interactive mode: auto-select recommended action")
+  .option("--no-interactive", "Skip interactive prompts (same as --yes)")
   .action(oodaCommand);
 
 // ============================================================================

@@ -1,6 +1,7 @@
 import pc from "picocolors";
 import * as path from "node:path";
 import * as fs from "node:fs";
+import { select, input, confirm } from "@inquirer/prompts";
 import { generateIndex, saveIndex, getIndex } from "../core/indexer.js";
 import { buildDepGraph } from "../core/dep-graph.js";
 import { buildApiGraph } from "../core/api-graph.js";
@@ -20,6 +21,8 @@ export interface OodaCommandOptions {
   refresh?: boolean;
   output?: string;
   focus?: string;
+  yes?: boolean;
+  interactive?: boolean;
 }
 
 interface Constitution {
@@ -148,20 +151,42 @@ export async function oodaCommand(options: OodaCommandOptions): Promise<void> {
     console.log(`\n  ${pc.yellow("★")} ${pc.bold("Recommended:")} ${actions[0].title}`);
   }
 
-  console.log(pc.cyan("\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"));
-  console.log(pc.bold("  🚀 ACT"));
-  console.log(pc.cyan("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"));
+  // Determine if we should run interactively
+  const isInteractive = options.interactive !== false && !options.yes;
 
-  console.log(pc.dim("  Tell your LLM which action to take:\n"));
-  console.log(`    ${pc.white("\"Do action 1\"")} or ${pc.white("\"Continue with the next task\"")}\n`);
+  if (isInteractive && actions.length > 0) {
+    // Interactive Propose & Confirm Loop
+    await runProposeConfirmLoop(state, actions, promptsDir, decisionContext);
+  } else {
+    // Non-interactive mode: just output the context files
+    console.log(pc.cyan("\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"));
+    console.log(pc.bold("  🚀 ACT"));
+    console.log(pc.cyan("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"));
 
-  console.log(pc.dim("  Or feed full context:"));
-  console.log(`    ${pc.dim("cat")} ${pc.cyan(".repointel/prompts/DECISION_CONTEXT.md")} ${pc.dim("| claude")}\n`);
+    if (options.yes) {
+      // Auto-select recommended action
+      const selectedAction = actions[0];
+      console.log(pc.green(`  ✓ Auto-selected: ${selectedAction.title}\n`));
 
-  console.log(pc.dim("  Decision context saved to:"));
-  console.log(`    ${pc.cyan(contextPath)}\n`);
+      const proposalPrompt = generateProposalPrompt(state, selectedAction, decisionContext);
+      const proposalPath = path.join(promptsDir, "PROPOSAL_PROMPT.md");
+      fs.writeFileSync(proposalPath, proposalPrompt);
 
-  console.log(pc.cyan("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"));
+      console.log(pc.dim("  Feed this to your LLM to get a proposed plan:"));
+      console.log(`    ${pc.dim("cat")} ${pc.cyan(".repointel/prompts/PROPOSAL_PROMPT.md")} ${pc.dim("| claude")}\n`);
+    } else {
+      console.log(pc.dim("  Tell your LLM which action to take:\n"));
+      console.log(`    ${pc.white("\"Do action 1\"")} or ${pc.white("\"Continue with the next task\"")}\n`);
+
+      console.log(pc.dim("  Or feed full context:"));
+      console.log(`    ${pc.dim("cat")} ${pc.cyan(".repointel/prompts/DECISION_CONTEXT.md")} ${pc.dim("| claude")}\n`);
+    }
+
+    console.log(pc.dim("  Decision context saved to:"));
+    console.log(`    ${pc.cyan(contextPath)}\n`);
+
+    console.log(pc.cyan("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"));
+  }
 }
 
 interface Action {
@@ -674,4 +699,309 @@ function printStateSummary(state: OodaState): void {
   if (currentFeature) {
     console.log(`  ${pc.dim("Focus:")}        ${pc.cyan(currentFeature.name)}`);
   }
+}
+
+// =============================================================================
+// Propose & Confirm Loop
+// =============================================================================
+
+/**
+ * Interactive Propose & Confirm loop for the DECIDE phase
+ */
+async function runProposeConfirmLoop(
+  state: OodaState,
+  actions: Action[],
+  promptsDir: string,
+  decisionContext: string
+): Promise<void> {
+  let continueLoop = true;
+
+  while (continueLoop) {
+    // Step 1: Action Selection
+    console.log(pc.cyan("\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"));
+    console.log(pc.bold("  🤝 PROPOSE & CONFIRM"));
+    console.log(pc.cyan("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"));
+
+    const choices = actions.map((action, i) => ({
+      name: `[${i + 1}] ${action.title}`,
+      value: i,
+      description: action.description,
+    }));
+    choices.push({
+      name: "[C] Custom request",
+      value: -1,
+      description: "Describe what you want to do",
+    });
+    choices.push({
+      name: "[Q] Quit",
+      value: -2,
+      description: "Exit without acting",
+    });
+
+    let selectedAction: Action;
+    let customRequest: string | undefined;
+
+    try {
+      const selection = await select({
+        message: "Select an action:",
+        choices,
+        default: 0,
+      });
+
+      if (selection === -2) {
+        console.log(pc.dim("\n  Exiting. Run `repointel ooda` again when ready.\n"));
+        return;
+      }
+
+      if (selection === -1) {
+        customRequest = await input({
+          message: "Describe what you want to do:",
+        });
+        selectedAction = {
+          title: "Custom Request",
+          description: customRequest,
+          type: "other",
+        };
+      } else {
+        selectedAction = actions[selection];
+      }
+    } catch {
+      // User pressed Ctrl+C
+      console.log(pc.dim("\n  Cancelled.\n"));
+      return;
+    }
+
+    console.log(pc.green(`\n  ✓ Selected: ${selectedAction.title}`));
+    if (selectedAction.description) {
+      console.log(pc.dim(`    ${selectedAction.description}`));
+    }
+
+    // Step 2: Generate Proposal Prompt
+    const proposalPrompt = generateProposalPrompt(state, selectedAction, decisionContext, customRequest);
+    const proposalPath = path.join(promptsDir, "PROPOSAL_PROMPT.md");
+    fs.writeFileSync(proposalPath, proposalPrompt);
+
+    console.log(pc.cyan("\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"));
+    console.log(pc.bold("  📝 PROPOSAL PROMPT GENERATED"));
+    console.log(pc.cyan("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"));
+
+    console.log(pc.dim("  Feed this to your LLM to get a proposed plan:\n"));
+    console.log(`    ${pc.green("cat .repointel/prompts/PROPOSAL_PROMPT.md | claude")}\n`);
+    console.log(pc.dim("  Or copy from:"));
+    console.log(`    ${pc.cyan(proposalPath)}\n`);
+
+    // Step 3: Get LLM's proposed plan from user
+    console.log(pc.cyan("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"));
+    console.log(pc.bold("  📋 PASTE LLM'S PROPOSED PLAN"));
+    console.log(pc.cyan("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"));
+
+    let proposedPlan: string;
+    try {
+      proposedPlan = await input({
+        message: "Paste the LLM's proposed plan (or 'skip' to approve without plan):",
+      });
+    } catch {
+      console.log(pc.dim("\n  Cancelled.\n"));
+      return;
+    }
+
+    if (proposedPlan.toLowerCase() === "skip") {
+      proposedPlan = `# Approved Action: ${selectedAction.title}\n\n${selectedAction.description || "No details provided."}`;
+    }
+
+    // Step 4: Confirm Loop
+    let confirmed = false;
+    let feedback: string | undefined;
+
+    while (!confirmed) {
+      console.log(pc.cyan("\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"));
+      console.log(pc.bold("  📋 PROPOSED PLAN"));
+      console.log(pc.cyan("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"));
+
+      // Display the plan (truncated if too long)
+      const planLines = proposedPlan.split("\n");
+      const displayLines = planLines.slice(0, 30);
+      console.log(pc.white(displayLines.map(l => `  ${l}`).join("\n")));
+      if (planLines.length > 30) {
+        console.log(pc.dim(`  ... (${planLines.length - 30} more lines)`));
+      }
+
+      console.log();
+
+      try {
+        const confirmChoice = await select({
+          message: "What would you like to do?",
+          choices: [
+            { name: "[A] Approve - proceed with this plan", value: "approve" },
+            { name: "[M] Modify - provide feedback and regenerate", value: "modify" },
+            { name: "[R] Reject - go back to action selection", value: "reject" },
+            { name: "[Q] Quit - exit without acting", value: "quit" },
+          ],
+        });
+
+        if (confirmChoice === "approve") {
+          confirmed = true;
+          // Save approved plan
+          const approvedPath = path.join(promptsDir, "APPROVED_PLAN.md");
+          const approvedContent = `# Approved Plan
+
+> Approved at ${new Date().toISOString()}
+> Action: ${selectedAction.title}
+
+${proposedPlan}
+
+---
+
+## Next Steps
+
+Run the commands or make the changes outlined above, then run \`repointel ooda\` again to update state.
+`;
+          fs.writeFileSync(approvedPath, approvedContent);
+
+          console.log(pc.green("\n  ✓ Plan approved!"));
+          console.log(pc.dim(`  Saved to: ${approvedPath}\n`));
+
+          // Show ACT phase
+          console.log(pc.cyan("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"));
+          console.log(pc.bold("  🚀 ACT - Execute the approved plan"));
+          console.log(pc.cyan("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"));
+
+          if (selectedAction.command) {
+            console.log(pc.dim("  Suggested command:"));
+            console.log(`    ${pc.green(selectedAction.command)}\n`);
+          }
+
+          console.log(pc.dim("  Full approved plan:"));
+          console.log(`    ${pc.cyan(".repointel/prompts/APPROVED_PLAN.md")}\n`);
+
+          console.log(pc.dim("  When done, run:"));
+          console.log(`    ${pc.green("repointel ooda")}\n`);
+
+          console.log(pc.cyan("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"));
+
+          continueLoop = false;
+
+        } else if (confirmChoice === "modify") {
+          feedback = await input({
+            message: "What changes do you want? (This will be added to the proposal prompt):",
+          });
+
+          // Regenerate proposal with feedback
+          const modifiedPrompt = generateProposalPrompt(state, selectedAction, decisionContext, customRequest, feedback);
+          fs.writeFileSync(proposalPath, modifiedPrompt);
+
+          console.log(pc.yellow("\n  ⟳ Proposal prompt updated with your feedback."));
+          console.log(pc.dim("  Feed to your LLM again:\n"));
+          console.log(`    ${pc.green("cat .repointel/prompts/PROPOSAL_PROMPT.md | claude")}\n`);
+
+          // Get new plan
+          try {
+            proposedPlan = await input({
+              message: "Paste the LLM's revised plan:",
+            });
+          } catch {
+            console.log(pc.dim("\n  Cancelled.\n"));
+            return;
+          }
+
+        } else if (confirmChoice === "reject") {
+          console.log(pc.yellow("\n  ⟳ Going back to action selection...\n"));
+          break; // Break inner loop, continue outer loop
+
+        } else if (confirmChoice === "quit") {
+          console.log(pc.dim("\n  Exiting. Run `repointel ooda` again when ready.\n"));
+          return;
+        }
+      } catch {
+        console.log(pc.dim("\n  Cancelled.\n"));
+        return;
+      }
+    }
+  }
+}
+
+/**
+ * Generate a proposal prompt for the selected action
+ */
+function generateProposalPrompt(
+  state: OodaState,
+  action: Action,
+  decisionContext: string,
+  customRequest?: string,
+  feedback?: string
+): string {
+  const { constitution, currentFeature } = state;
+
+  let prompt = `# Proposal Request
+
+> Generate a specific, actionable plan for the following action
+
+## Selected Action
+
+**${action.title}**
+
+${action.description || ""}
+
+${action.command ? `Suggested command: \`${action.command}\`` : ""}
+
+${action.why ? `Why: ${action.why}` : ""}
+
+`;
+
+  if (customRequest) {
+    prompt += `## Custom Request
+
+${customRequest}
+
+`;
+  }
+
+  if (feedback) {
+    prompt += `## Feedback on Previous Proposal
+
+The user wants the following changes:
+
+${feedback}
+
+`;
+  }
+
+  prompt += `## Project Context
+
+`;
+
+  if (constitution) {
+    prompt += `**Project:** ${constitution.name}
+${constitution.description ? `> ${constitution.description}` : ""}
+
+`;
+  }
+
+  if (currentFeature) {
+    prompt += `**Current Feature:** ${currentFeature.name}
+**Tasks Completed:** ${currentFeature.tasks?.filter(t => t.status === "completed").length || 0}/${currentFeature.tasks?.length || 0}
+
+`;
+  }
+
+  prompt += `## Instructions
+
+Based on the action and context above, generate a **specific implementation plan** that includes:
+
+1. **Summary** - One paragraph explaining what will be done
+2. **Steps** - Numbered list of specific actions to take
+3. **Files** - List of files that will be created/modified
+4. **Commands** - Any shell commands to run
+5. **Verification** - How to verify the changes work
+
+Keep the plan focused and actionable. The user will review and approve before execution.
+
+---
+
+## Full Decision Context
+
+${decisionContext}
+`;
+
+  return prompt;
 }
