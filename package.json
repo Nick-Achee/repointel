@@ -1,6 +1,6 @@
 {
   "name": "repointel",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "description": "Repo intelligence CLI - architecture graphs, context slices, and LLM-ready artifacts",
   "type": "module",
   "main": "./dist/index.js",
@@ -29,12 +29,12 @@
   ],
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/nicholasgriffintn/repointel.git"
+    "url": "git+https://github.com/Nick-Achee/repointel.git"
   },
   "bugs": {
-    "url": "https://github.com/nicholasgriffintn/repointel/issues"
+    "url": "https://github.com/Nick-Achee/repointel/issues"
   },
-  "homepage": "https://github.com/nicholasgriffintn/repointel#readme",
+  "homepage": "https://github.com/Nick-Achee/repointel#readme",
   "engines": {
     "node": ">=18"
   },
