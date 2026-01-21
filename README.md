@@ -1,6 +1,8 @@
 # repointel
 
-> Repo intelligence CLI — Generate architecture graphs, context slices, and LLM-ready artifacts from any TypeScript/JavaScript codebase.
+> **Repo Intel** — A CLI tool for repo intelligence that generates architecture graphs, context slices, and LLM-ready artifacts from any TypeScript/JavaScript codebase.
+
+*Also known as: repo intel, repo-intel, repository intelligence*
 
 [![npm version](https://img.shields.io/npm/v/repointel.svg)](https://www.npmjs.com/package/repointel)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)

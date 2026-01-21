@@ -39,10 +39,14 @@
     "node": ">=18"
   },
   "keywords": [
+    "repo-intel",
+    "repo intel",
+    "repository-intelligence",
     "cli",
     "architecture",
     "llm",
     "code-analysis",
+    "codebase-analysis",
     "nextjs",
     "typescript",
     "dependency-graph",
@@ -50,9 +54,13 @@
     "convex",
     "mermaid",
     "claude",
+    "gpt",
     "ai",
     "spec",
-    "audit"
+    "audit",
+    "ooda",
+    "token-budgeting",
+    "speckit"
   ],
   "author": "Nick",
   "license": "MIT",
