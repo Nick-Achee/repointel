@@ -191,6 +191,31 @@ describe("symbol-scoped impact", () => {
     expect(impact.direct).not.toContain("src/display.ts");
   });
 
+  it("explains each affected file: depth, the edge it came through, and line", async () => {
+    const graph = await buildDepGraph({ root: symRoot, includeTests: true });
+    const impact = findDependents(graph, ["src/utils.ts"], {
+      symbol: "matchesPattern",
+    });
+
+    const matcher = impact.details.find((d) => d.file === "src/matcher.ts");
+    expect(matcher).toMatchObject({ depth: 1, via: "src/utils.ts" });
+    expect(matcher?.symbols).toContain("matchesPattern");
+    expect(matcher?.line).toBeGreaterThan(0);
+
+    // app.ts only imports matcher.ts, so it is one hop further out.
+    const app = impact.details.find((d) => d.file === "src/app.ts");
+    expect(app).toMatchObject({ depth: 2, via: "src/matcher.ts" });
+  });
+
+  it("orders details by depth so the closest blast radius comes first", async () => {
+    const graph = await buildDepGraph({ root: symRoot, includeTests: true });
+    const depths = findDependents(graph, ["src/utils.ts"]).details.map(
+      (d) => d.depth
+    );
+
+    expect(depths).toEqual([...depths].sort((a, b) => a - b));
+  });
+
   it("falls back to all importers when no symbol is given", async () => {
     const graph = await buildDepGraph({ root: symRoot });
     const impact = findDependents(graph, ["src/utils.ts"]);

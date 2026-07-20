@@ -3,7 +3,7 @@ import * as path from "node:path";
 import * as fs from "node:fs";
 import { select, input, confirm } from "@inquirer/prompts";
 import { generateIndex, saveIndex, getIndex } from "../core/indexer.js";
-import { buildDepGraph } from "../core/dep-graph.js";
+import { buildDepGraph, findDependents } from "../core/dep-graph.js";
 import { buildApiGraph } from "../core/api-graph.js";
 import {
   detectSpecKit,
@@ -375,6 +375,33 @@ export async function buildOodaPayload(
   // DECIDE — working-tree reality outranks spec state: uncommitted work is
   // what is actually in flight, regardless of what tasks.md claims.
   const actions = generateActions(state);
+  // Blast radius: what the uncommitted source changes actually reach.
+  const indexedFiles = new Set(index.files.map((f) => f.relativePath));
+  const changedSourceFiles = [...git.uncommittedFiles, ...git.untrackedFiles]
+    .filter((f) => indexedFiles.has(f))
+    .sort();
+  const impact =
+    changedSourceFiles.length > 0
+      ? findDependents(depGraph, changedSourceFiles)
+      : { direct: [], transitive: [], all: [], details: [] };
+  const blastRadius = {
+    changedSourceFiles,
+    affected: impact.all,
+    direct: impact.direct,
+    transitive: impact.transitive,
+    details: impact.details.slice(0, 20),
+  };
+
+  if (blastRadius.affected.length > 0) {
+    actions.unshift({
+      title: `Verify ${blastRadius.affected.length} file(s) downstream of your changes`,
+      description: `${changedSourceFiles.length} changed source file(s) are imported by ${blastRadius.direct.length} file(s) directly and ${blastRadius.transitive.length} transitively.`,
+      command: "npm run typecheck && npm run test:run",
+      why: "These files consume what you changed — they are where a regression would surface",
+      type: "fix",
+    });
+  }
+
   const changedCount = git.uncommittedFiles.length + git.untrackedFiles.length;
   if (changedCount > 0) {
     const sample = [...git.uncommittedFiles, ...git.untrackedFiles].slice(0, 5);
@@ -428,7 +455,7 @@ export async function buildOodaPayload(
         externalDeps: depGraph.stats.externalDeps,
       },
     },
-    decide: { actions },
+    decide: { actions, blastRadius },
     artifacts: {
       index: ".repointel/index.json",
       depGraph: ".repointel/graphs/deps.json",

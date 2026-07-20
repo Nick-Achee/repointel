@@ -4,6 +4,7 @@ import type {
   DepGraph,
   DepNode,
   DepEdge,
+  ImpactDetail,
   RepoIndex,
   FileType,
   GraphOptions,
@@ -378,6 +379,7 @@ export async function buildDepGraph(options: GraphOptions = {}): Promise<DepGrap
           to: resolvedPath,
           type: getImportType(content, importSpec),
           symbols: file.importBindings?.[importSpec],
+          line: file.importLines?.[importSpec],
         });
       }
     }
@@ -598,7 +600,12 @@ export function findDependents(
   graph: DepGraph,
   targets: string[],
   options: { symbol?: string } = {}
-): { direct: string[]; transitive: string[]; all: string[] } {
+): {
+  direct: string[];
+  transitive: string[];
+  all: string[];
+  details: ImpactDetail[];
+} {
   const importers = new Map<string, string[]>();
   for (const edge of graph.edges) {
     const list = importers.get(edge.to);
@@ -650,16 +657,42 @@ export function findDependents(
     }
   }
 
-  // Walk upstream from the direct importers.
+  // Walk upstream from the direct importers, recording how each file was
+  // reached so consumers can see the blast radius in order.
+  const edgeBetween = new Map<string, DepEdge>();
+  for (const edge of graph.edges) {
+    const key = `${edge.from} ${edge.to}`;
+    if (!edgeBetween.has(key)) edgeBetween.set(key, edge);
+  }
+  const describe = (file: string, via: string, depth: number): ImpactDetail => {
+    const edge = edgeBetween.get(`${file} ${via}`);
+    return { file, depth, via, symbols: edge?.symbols, line: edge?.line };
+  };
+
+  const details: ImpactDetail[] = [];
   const seen = new Set<string>(direct);
-  const queue = [...direct];
-  while (queue.length > 0) {
-    const current = queue.shift()!;
-    for (const importer of importers.get(current) || []) {
-      if (targetSet.has(importer) || seen.has(importer)) continue;
-      seen.add(importer);
-      queue.push(importer);
+
+  for (const file of [...direct].sort()) {
+    const via = targets.find((t) =>
+      edgeBetween.has(`${file} ${t}`)
+    );
+    details.push(describe(file, via ?? targets[0], 1));
+  }
+
+  let frontier = [...direct].sort();
+  let depth = 2;
+  while (frontier.length > 0) {
+    const next: string[] = [];
+    for (const current of frontier) {
+      for (const importer of (importers.get(current) || []).sort()) {
+        if (targetSet.has(importer) || seen.has(importer)) continue;
+        seen.add(importer);
+        details.push(describe(importer, current, depth));
+        next.push(importer);
+      }
     }
+    frontier = next;
+    depth++;
   }
 
   const transitive = [...seen].filter((f) => !direct.has(f)).sort();
@@ -667,6 +700,7 @@ export function findDependents(
     direct: [...direct].sort(),
     transitive,
     all: [...seen].sort(),
+    details,
   };
 }
 

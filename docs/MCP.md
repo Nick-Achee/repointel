@@ -59,6 +59,10 @@ Every payload also carries `project` (name, version, description, README tagline
 points) and `git` (branch, head, uncommitted and untracked files, recent commits), so the
 recommendations in `decide` reflect the working tree rather than only what a spec claims.
 
+`decide.blastRadius` needs no arguments at all: it runs impact analysis on whatever source
+files you have uncommitted and reports what they reach, nearest first — with the importing
+line number for each, so you can go straight to the call site.
+
 | Argument | Type | Purpose |
 |----------|------|---------|
 | `root` | string | Repo root. Defaults to cwd. |
@@ -97,9 +101,17 @@ recommendations in `decide` reflect the working tree rather than only what a spe
   // impact analysis: who breaks if the seeds change (reverse dependencies)
   "impact": {
     "of": ["src/auth/login.ts"],
+    "symbol": null,
     "direct": ["src/routes/session.ts"],
     "transitive": ["src/bin/cli.ts"],
-    "totalAffected": 2
+    "totalAffected": 2,
+    // why each file is affected, nearest first
+    "details": [
+      { "file": "src/routes/session.ts", "depth": 1, "via": "src/auth/login.ts",
+        "symbols": ["login"], "line": 4 },
+      { "file": "src/bin/cli.ts", "depth": 2, "via": "src/routes/session.ts",
+        "symbols": ["session"], "line": 11 }
+    ]
   }
 }
 ```

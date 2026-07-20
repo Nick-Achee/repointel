@@ -82,6 +82,8 @@ export interface FileInfo {
   imports: string[];
   /** Per-import detail: which bindings come from which module specifier */
   importBindings?: Record<string, string[]>;
+  /** Line number (1-based) of each module specifier's import statement */
+  importLines?: Record<string, number>;
   exports: string[];
   /** Exported symbol -> sibling exports its body references (delegation) */
   symbolRefs?: Record<string, string[]>;
@@ -185,6 +187,21 @@ export interface DepEdge {
   symbol?: string;         // specific export imported
   /** Named bindings carried by this import ("*" for namespace, "default" for default) */
   symbols?: string[];
+  /** Line number (1-based) of the import statement in `from` */
+  line?: number;
+}
+
+/** One affected file, with why it is affected */
+export interface ImpactDetail {
+  file: string;
+  /** 1 = imports a target directly; 2+ = reached through that many hops */
+  depth: number;
+  /** The file this one imports to be affected */
+  via: string;
+  /** Bindings carried on that edge */
+  symbols?: string[];
+  /** Line of the import statement in `file` */
+  line?: number;
 }
 
 export interface DepGraph {

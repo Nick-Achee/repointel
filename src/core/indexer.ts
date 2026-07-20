@@ -26,7 +26,7 @@ import {
   readJson,
 } from "./utils.js";
 
-const INDEX_VERSION = "1.1.0";
+const INDEX_VERSION = "1.2.0";
 
 /**
  * Default file patterns to scan
@@ -249,6 +249,7 @@ function extractImportBindings(content: string): Record<string, string[]> {
   )) {
     add(m[2], parseClause(m[1]));
   }
+
   // export { a, b } from "source" / export * from "source"
   for (const m of source.matchAll(
     /^[ \t]*export\s+(?:type\s+)?(\*(?:\s+as\s+\w+)?|\{[^}]*\})\s*from\s*['"]([^'"]+)['"]/gm
@@ -257,6 +258,29 @@ function extractImportBindings(content: string): Record<string, string[]> {
   }
 
   return bindings;
+}
+
+/**
+ * Line number (1-based) where each module specifier is imported.
+ */
+function extractImportLines(content: string): Record<string, number> {
+  const source = stripComments(content);
+  const lines: Record<string, number> = {};
+  const lineOf = (index: number) =>
+    source.slice(0, index).split("\n").length;
+
+  const patterns = [
+    /^[ \t]*import\s+(?:[^'"]*?\s+from\s+)?['"]([^'"]+)['"]/gm,
+    /^[ \t]*export\s+(?:type\s+)?(?:\*(?:\s+as\s+\w+)?|\{[^}]*\})\s*from\s*['"]([^'"]+)['"]/gm,
+    /import\s*\(\s*['"]([^'"]+)['"]\s*\)/g,
+  ];
+  for (const re of patterns) {
+    for (const m of source.matchAll(re)) {
+      if (lines[m[1]] === undefined) lines[m[1]] = lineOf(m.index ?? 0);
+    }
+  }
+
+  return lines;
 }
 
 /**
@@ -467,6 +491,7 @@ function analyzeFile(relativePath: string, repoRoot: string): FileInfo | null {
     isDynamicImport,
     imports: extractImports(content),
     importBindings: extractImportBindings(content),
+    importLines: extractImportLines(content),
     exports: fileExports,
     symbolRefs: extractSymbolRefs(content, fileExports),
     hooks: countHooks(content),

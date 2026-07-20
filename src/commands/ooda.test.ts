@@ -65,6 +65,28 @@ describe("currentFeature selection", () => {
   });
 });
 
+describe("blast radius of uncommitted work", () => {
+  it("reports what the changed source files affect, using the dep graph", async () => {
+    const lines: string[] = [];
+    const spy = vi
+      .spyOn(console, "log")
+      .mockImplementation((...args: unknown[]) => {
+        lines.push(args.join(" "));
+      });
+    try {
+      // repoRoot is not a git repo, so blastRadius must degrade gracefully.
+      await oodaCommand({ root: repoRoot, json: true });
+    } finally {
+      spy.mockRestore();
+    }
+
+    const parsed = JSON.parse(lines.join("\n"));
+    expect(parsed.decide).toHaveProperty("blastRadius");
+    expect(parsed.decide.blastRadius.changedSourceFiles).toEqual([]);
+    expect(parsed.decide.blastRadius.affected).toEqual([]);
+  });
+});
+
 describe("ooda --json", () => {
   it("emits one machine-readable JSON document with observe/orient/decide", async () => {
     const lines: string[] = [];
