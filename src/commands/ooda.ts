@@ -23,6 +23,7 @@ export interface OodaCommandOptions {
   focus?: string;
   yes?: boolean;
   interactive?: boolean;
+  json?: boolean;
 }
 
 interface Constitution {
@@ -54,6 +55,10 @@ interface OodaState {
 export async function oodaCommand(options: OodaCommandOptions): Promise<void> {
   const root = process.cwd();
 
+  if (options.json) {
+    return oodaJsonCommand(root, options);
+  }
+
   console.log(pc.cyan("\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"));
   console.log(pc.bold("  🔄 OODA Loop - Observe → Orient → Decide → Act"));
   console.log(pc.cyan("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"));
@@ -84,7 +89,7 @@ export async function oodaCommand(options: OodaCommandOptions): Promise<void> {
   if (!fs.existsSync(depsPath) || options.refresh) {
     console.log(pc.dim("     Building dependency graph..."));
     ensureDir(graphsDir);
-    const depGraph = await buildDepGraph(root);
+    const depGraph = await buildDepGraph({ root });
     fs.writeFileSync(depsPath, JSON.stringify(depGraph, null, 2));
     console.log(pc.green(`     ✓ ${depGraph.nodes.length} nodes, ${depGraph.edges.length} edges`));
   } else {
@@ -217,7 +222,7 @@ function generateActions(state: OodaState): Action[] {
 
   // Priority 2: Current feature tasks
   if (currentFeature) {
-    const inProgress = currentFeature.tasks?.filter(t => t.status === "in_progress") || [];
+    const inProgress = currentFeature.tasks?.filter(t => t.status === "in-progress") || [];
     const pending = currentFeature.tasks?.filter(t => t.status === "pending") || [];
 
     if (inProgress.length > 0) {
@@ -225,7 +230,7 @@ function generateActions(state: OodaState): Action[] {
       actions.push({
         title: `Continue: "${task.title}"`,
         description: `In-progress task for ${currentFeature.name}`,
-        command: `repointel slice --seeds ${currentFeature.spec?.entryPoints?.[0] || "src/"} --name ${currentFeature.id}`,
+        command: `repointel slice --seeds ${featureSeedHint(state.root, currentFeature)} --name ${currentFeature.id}`,
         why: "Complete in-progress work before starting new tasks",
         type: "task",
       });
@@ -234,7 +239,7 @@ function generateActions(state: OodaState): Action[] {
       actions.push({
         title: `Start: "${task.title}"`,
         description: `Next pending task for ${currentFeature.name}`,
-        command: `repointel slice --seeds ${currentFeature.spec?.entryPoints?.[0] || "src/"} --name ${currentFeature.id}`,
+        command: `repointel slice --seeds ${featureSeedHint(state.root, currentFeature)} --name ${currentFeature.id}`,
         why: "Focused context helps complete tasks faster",
         type: "task",
       });
@@ -295,6 +300,119 @@ function generateActions(state: OodaState): Action[] {
   return actions.slice(0, 5); // Max 5 options
 }
 
+/**
+ * Best available seed for a feature's slice command: the seeds of an existing
+ * slice for that feature, else the src/ directory (directory seeds expand).
+ */
+function featureSeedHint(root: string, feature: SpecKitFeature): string {
+  const slicePath = path.join(root, ".repointel", "slices", `${feature.id}.json`);
+  try {
+    const slice = JSON.parse(fs.readFileSync(slicePath, "utf-8"));
+    if (Array.isArray(slice.seedFiles) && slice.seedFiles.length > 0) {
+      return slice.seedFiles[0];
+    }
+  } catch {
+    // fall through to default
+  }
+  return "src/";
+}
+
+function summarizeTasks(feature: SpecKitFeature) {
+  const tasks = feature.tasks ?? [];
+  const byStatus = (s: string) => tasks.filter((t) => t.status === s);
+  return {
+    total: tasks.length,
+    completed: byStatus("completed").length,
+    inProgress: byStatus("in-progress").length,
+    pending: byStatus("pending").length,
+    inProgressTitles: byStatus("in-progress").map((t) => t.title),
+    nextPending: byStatus("pending")[0]?.title ?? null,
+  };
+}
+
+/**
+ * Machine-readable OODA: observe (fresh index) + orient (speckit, dep graph)
+ * + decide (ranked actions) as one structured payload.
+ * Read-only: never scaffolds .specify/. Shared by `ooda --json` and the MCP server.
+ */
+export async function buildOodaPayload(
+  root: string,
+  options: OodaCommandOptions
+): Promise<Record<string, unknown>> {
+  // OBSERVE — getIndex is staleness-aware, so this is always current
+  const index = await getIndex({ root, refresh: options.refresh });
+  saveIndex(index, path.join(root, ".repointel"));
+
+  // ORIENT — read-only
+  const graphsDir = path.join(root, ".repointel", "graphs");
+  ensureDir(graphsDir);
+  const depGraph = await buildDepGraph({ root });
+  fs.writeFileSync(
+    path.join(graphsDir, "deps.json"),
+    JSON.stringify(depGraph, null, 2)
+  );
+
+  const state = await gatherState(root, options);
+  state.index = index;
+
+  // DECIDE — same action generation as interactive mode
+  const actions = generateActions(state);
+
+  const decisionContext = await generateDecisionContext(state, options);
+  const promptsDir = path.join(root, ".repointel", "prompts");
+  ensureDir(promptsDir);
+  const contextPath = path.join(promptsDir, "DECISION_CONTEXT.md");
+  fs.writeFileSync(contextPath, decisionContext);
+
+  const payload = {
+    root,
+    observe: {
+      files: index.summary.totalFiles,
+      totalSizeBytes: index.summary.totalSizeBytes,
+      frameworks: index.frameworks,
+      byType: index.summary.byType,
+    },
+    orient: {
+      features: (state.speckit?.features ?? []).map((f) => ({
+        id: f.id,
+        number: f.number,
+        name: f.name,
+        tasks: summarizeTasks(f),
+      })),
+      currentFeature: state.currentFeature
+        ? {
+            id: state.currentFeature.id,
+            number: state.currentFeature.number,
+            name: state.currentFeature.name,
+            tasks: summarizeTasks(state.currentFeature),
+          }
+        : null,
+      graph: {
+        nodes: depGraph.nodes.length,
+        edges: depGraph.edges.length,
+        circular: depGraph.cycles.length,
+        externalDeps: depGraph.stats.externalDeps,
+      },
+    },
+    decide: { actions },
+    artifacts: {
+      index: ".repointel/index.json",
+      depGraph: ".repointel/graphs/deps.json",
+      decisionContext: ".repointel/prompts/DECISION_CONTEXT.md",
+    },
+  };
+
+  return payload;
+}
+
+async function oodaJsonCommand(
+  root: string,
+  options: OodaCommandOptions
+): Promise<void> {
+  const payload = await buildOodaPayload(root, options);
+  console.log(JSON.stringify(payload, null, 2));
+}
+
 async function gatherState(root: string, options: OodaCommandOptions): Promise<OodaState> {
   const indexPath = path.join(root, ".repointel", "index.json");
   const hasIndex = fs.existsSync(indexPath);
@@ -302,7 +420,7 @@ async function gatherState(root: string, options: OodaCommandOptions): Promise<O
   let index: RepoIndex | null = null;
   if (hasIndex) {
     try {
-      index = await getIndex(root);
+      index = await getIndex({ root });
     } catch {
       // Will need to re-observe
     }
@@ -321,11 +439,11 @@ async function gatherState(root: string, options: OodaCommandOptions): Promise<O
   // Find current/focused feature
   let currentFeature: SpecKitFeature | null = null;
   if (speckit && options.focus) {
-    currentFeature = findFeature(speckit, options.focus);
+    currentFeature = findFeature(speckit, options.focus) ?? null;
   } else if (speckit && speckit.features.length > 0) {
     // Auto-detect: find in-progress feature
     currentFeature = speckit.features.find(f => {
-      const inProgress = f.tasks?.filter(t => t.status === "in_progress") || [];
+      const inProgress = f.tasks?.filter(t => t.status === "in-progress") || [];
       return inProgress.length > 0;
     }) || speckit.features[speckit.features.length - 1];
   }
@@ -494,7 +612,7 @@ ${antiPatterns.map(([pattern, count]) => `- ${pattern}: ${count}`).join("\n")}
 
     // In-progress work
     const inProgressFeatures = speckit.features.filter(f => {
-      const inProgress = f.tasks?.filter(t => t.status === "in_progress") || [];
+      const inProgress = f.tasks?.filter(t => t.status === "in-progress") || [];
       return inProgress.length > 0;
     });
 
@@ -502,7 +620,7 @@ ${antiPatterns.map(([pattern, count]) => `- ${pattern}: ${count}`).join("\n")}
       context += `
 ### 🔄 Currently In Progress
 ${inProgressFeatures.map(f => {
-  const inProgress = f.tasks?.filter(t => t.status === "in_progress") || [];
+  const inProgress = f.tasks?.filter(t => t.status === "in-progress") || [];
   return `- **${f.id}**: ${f.name}
   - Active tasks: ${inProgress.map(t => t.title).join(", ")}`;
 }).join("\n")}
@@ -563,7 +681,7 @@ ${currentFeature.plan.title ? `**Title:** ${currentFeature.plan.title}` : ""}
     // Tasks
     if (currentFeature.tasks && currentFeature.tasks.length > 0) {
       const completed = currentFeature.tasks.filter(t => t.status === "completed");
-      const inProgress = currentFeature.tasks.filter(t => t.status === "in_progress");
+      const inProgress = currentFeature.tasks.filter(t => t.status === "in-progress");
       const pending = currentFeature.tasks.filter(t => t.status === "pending");
 
       context += `

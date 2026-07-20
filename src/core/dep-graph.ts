@@ -24,22 +24,140 @@ interface TsConfigPaths {
 }
 
 /**
- * Load tsconfig path aliases
+ * Strip JSONC comments and trailing commas (tsconfig.json is JSONC, not JSON)
+ */
+function stripJsonComments(input: string): string {
+  let out = "";
+  let inString = false;
+  let inLine = false;
+  let inBlock = false;
+
+  for (let i = 0; i < input.length; i++) {
+    const ch = input[i];
+    const next = input[i + 1];
+
+    if (inLine) {
+      if (ch === "\n") {
+        inLine = false;
+        out += ch;
+      }
+      continue;
+    }
+    if (inBlock) {
+      if (ch === "*" && next === "/") {
+        inBlock = false;
+        i++;
+      }
+      continue;
+    }
+    if (inString) {
+      out += ch;
+      if (ch === "\\" && next !== undefined) {
+        out += next;
+        i++;
+      } else if (ch === '"') {
+        inString = false;
+      }
+      continue;
+    }
+    if (ch === '"') {
+      inString = true;
+      out += ch;
+      continue;
+    }
+    if (ch === "/" && next === "/") {
+      inLine = true;
+      continue;
+    }
+    if (ch === "/" && next === "*") {
+      inBlock = true;
+      i++;
+      continue;
+    }
+    out += ch;
+  }
+
+  return out.replace(/,\s*([}\]])/g, "$1");
+}
+
+/**
+ * Load tsconfig path aliases, following relative `extends` chains
  */
 function loadTsConfigPaths(repoRoot: string): TsConfigPaths {
-  const tsconfigPath = path.join(repoRoot, "tsconfig.json");
-  const content = readFileSafe(tsconfigPath);
+  return readTsConfig(path.join(repoRoot, "tsconfig.json"), 0);
+}
+
+function readTsConfig(configPath: string, depth: number): TsConfigPaths {
+  if (depth > 5) return {};
+  const content = readFileSafe(configPath);
   if (!content) return {};
 
   try {
-    const tsconfig = JSON.parse(content);
+    const parsed = JSON.parse(stripJsonComments(content));
+
+    let base: TsConfigPaths = {};
+    if (typeof parsed.extends === "string" && parsed.extends.startsWith(".")) {
+      let extendsPath = path.resolve(path.dirname(configPath), parsed.extends);
+      if (!extendsPath.endsWith(".json")) extendsPath += ".json";
+      base = readTsConfig(extendsPath, depth + 1);
+    }
+
     return {
-      baseUrl: tsconfig.compilerOptions?.baseUrl,
-      paths: tsconfig.compilerOptions?.paths,
+      baseUrl: parsed.compilerOptions?.baseUrl ?? base.baseUrl,
+      paths: { ...(base.paths || {}), ...(parsed.compilerOptions?.paths || {}) },
     };
   } catch {
     return {};
   }
+}
+
+/**
+ * Resolve an import specifier through tsconfig `paths` mappings.
+ * Returns the resolved repo-relative file path, or null if no mapping matched.
+ */
+function resolveViaTsConfigPaths(
+  importSpec: string,
+  repoRoot: string,
+  tsConfig: TsConfigPaths
+): string | null {
+  const paths = tsConfig.paths;
+  if (!paths) return null;
+  const baseDir = tsConfig.baseUrl || ".";
+
+  for (const [pattern, targets] of Object.entries(paths)) {
+    const starIdx = pattern.indexOf("*");
+    let matched: string | null = null;
+
+    if (starIdx === -1) {
+      if (importSpec === pattern) matched = "";
+      else continue;
+    } else {
+      const prefix = pattern.slice(0, starIdx);
+      const suffix = pattern.slice(starIdx + 1);
+      if (
+        importSpec.startsWith(prefix) &&
+        importSpec.endsWith(suffix) &&
+        importSpec.length >= prefix.length + suffix.length
+      ) {
+        matched = importSpec.slice(
+          prefix.length,
+          importSpec.length - suffix.length
+        );
+      } else {
+        continue;
+      }
+    }
+
+    for (const target of targets) {
+      const candidate = path.normalize(
+        path.join(baseDir, target.replace("*", matched))
+      );
+      const resolved = tryResolveFile(candidate, repoRoot);
+      if (resolved) return resolved;
+    }
+  }
+
+  return null;
 }
 
 /**
@@ -83,37 +201,35 @@ function resolveImport(
   repoRoot: string,
   tsConfig: TsConfigPaths
 ): { path: string | null; isExternal: boolean } {
-  // External package
-  if (
-    !importSpec.startsWith(".") &&
-    !importSpec.startsWith("@/") &&
-    !importSpec.startsWith("~/") &&
-    !importSpec.startsWith("#")
-  ) {
-    return { path: null, isExternal: true };
-  }
-
-  // Handle @/ alias (common in Next.js)
-  if (importSpec.startsWith("@/")) {
-    const aliasPath = importSpec.replace("@/", "src/");
-    const resolved = tryResolveFile(aliasPath, repoRoot);
-    return { path: resolved, isExternal: false };
-  }
-
-  // Handle ~/ alias
-  if (importSpec.startsWith("~/")) {
-    const aliasPath = importSpec.replace("~/", "");
-    const resolved = tryResolveFile(aliasPath, repoRoot);
-    return { path: resolved, isExternal: false };
-  }
-
-  // Handle relative imports
+  // Relative imports
   if (importSpec.startsWith(".")) {
     const fromDir = path.dirname(fromFile);
     const relativePath = path.join(fromDir, importSpec);
     const normalized = path.normalize(relativePath);
     const resolved = tryResolveFile(normalized, repoRoot);
     return { path: resolved, isExternal: false };
+  }
+
+  // tsconfig path aliases — checked before the external guard so custom
+  // aliases like @lib/* are not misclassified as external packages
+  const aliased = resolveViaTsConfigPaths(importSpec, repoRoot, tsConfig);
+  if (aliased) {
+    return { path: aliased, isExternal: false };
+  }
+
+  // Fallback heuristics for repos without tsconfig paths
+  if (importSpec.startsWith("@/")) {
+    const resolved =
+      tryResolveFile(importSpec.replace("@/", "src/"), repoRoot) ??
+      tryResolveFile(importSpec.replace("@/", ""), repoRoot);
+    return { path: resolved, isExternal: false };
+  }
+  if (importSpec.startsWith("~/")) {
+    const resolved = tryResolveFile(importSpec.replace("~/", ""), repoRoot);
+    return { path: resolved, isExternal: false };
+  }
+  if (importSpec.startsWith("#")) {
+    return { path: null, isExternal: true };
   }
 
   return { path: null, isExternal: true };
@@ -310,6 +426,41 @@ export async function buildDepGraph(options: GraphOptions = {}): Promise<DepGrap
 }
 
 /**
+ * Expand seed entries: a seed naming a directory becomes every indexed file
+ * under it; file seeds pass through unchanged. Seeds matching nothing are
+ * kept as-is so callers can decide how to report them.
+ */
+export function expandSeeds(seeds: string[], index: RepoIndex): string[] {
+  const known = new Set(index.files.map((f) => f.relativePath));
+  const expanded: string[] = [];
+
+  for (const seed of seeds) {
+    const normalized = seed
+      .replace(/\\/g, "/")
+      .replace(/^\.\//, "")
+      .replace(/\/+$/, "");
+
+    if (known.has(normalized)) {
+      expanded.push(normalized);
+      continue;
+    }
+
+    const prefix = normalized + "/";
+    const matches = index.files
+      .map((f) => f.relativePath)
+      .filter((p) => p.startsWith(prefix));
+
+    if (matches.length > 0) {
+      expanded.push(...matches);
+    } else {
+      expanded.push(seed);
+    }
+  }
+
+  return [...new Set(expanded)];
+}
+
+/**
  * Build dependency graph starting from seed files
  */
 export async function buildDepGraphFromSeeds(
@@ -333,8 +484,8 @@ export async function buildDepGraphFromSeeds(
     fileMap.set(file.relativePath, file);
   }
 
-  // Initialize queue with seeds
-  for (const seed of seeds) {
+  // Initialize queue with seeds (directories expand to their files)
+  for (const seed of expandSeeds(seeds, index)) {
     queue.push({ path: seed, depth: 0 });
   }
 

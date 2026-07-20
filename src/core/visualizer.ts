@@ -317,7 +317,7 @@ export async function buildDataFlowGraph(
  */
 export function dataFlowToMermaid(
   graph: DataFlowGraph,
-  options: { direction?: "TD" | "LR" } = {}
+  options: { direction?: "TD" | "LR" | "BT" | "RL" } = {}
 ): string {
   const direction = options.direction || "TD";
   const lines: string[] = [`graph ${direction}`];
@@ -384,7 +384,7 @@ export function dataFlowToMermaid(
  */
 export function architectureToMermaid(
   graph: DataFlowGraph,
-  options: { direction?: "TD" | "LR" } = {}
+  options: { direction?: "TD" | "LR" | "BT" | "RL" } = {}
 ): string {
   const direction = options.direction || "TD";
   const lines: string[] = [`graph ${direction}`];
@@ -522,7 +522,7 @@ export function requestFlowToMermaid(graph: DataFlowGraph): string {
  */
 export function componentDepsToMermaid(
   graph: DataFlowGraph,
-  options: { direction?: "TD" | "LR" } = {}
+  options: { direction?: "TD" | "LR" | "BT" | "RL" } = {}
 ): string {
   const direction = options.direction || "LR";
   const lines: string[] = [`flowchart ${direction}`];

@@ -275,20 +275,22 @@ function parseTasks(content: string): SpecKitTask[] {
   let currentTask: Partial<SpecKitTask> | null = null;
 
   for (const line of lines) {
-    // Task line: - [ ] Task title or - [x] Completed task
-    const taskMatch = line.match(/^-\s*\[([ xX])\]\s*(.+)$/);
+    // Task line: - [ ] pending, - [x] completed, - [~] or - [/] in-progress
+    const taskMatch = line.match(/^-\s*\[([ xX~/])\]\s*(.+)$/);
     if (taskMatch) {
       if (currentTask && currentTask.title) {
         tasks.push(currentTask as SpecKitTask);
       }
 
-      const isCompleted = taskMatch[1].toLowerCase() === "x";
+      const marker = taskMatch[1].toLowerCase();
+      const status: SpecKitTask["status"] =
+        marker === "x" ? "completed" : marker === " " ? "pending" : "in-progress";
       const title = taskMatch[2].trim();
 
       currentTask = {
         id: `task-${tasks.length + 1}`,
         title,
-        status: isCompleted ? "completed" : "pending",
+        status,
         dependencies: [],
         parallel: title.includes("||") || title.includes("[parallel]"),
       };

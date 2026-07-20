@@ -115,10 +115,14 @@ function extractImports(content: string): string[] {
   );
   const dynamicImports = content.matchAll(/import\s*\(\s*['"]([^'"]+)['"]\s*\)/g);
   const requires = content.matchAll(/require\s*\(\s*['"]([^'"]+)['"]\s*\)/g);
+  const reExports = content.matchAll(
+    /export\s+(?:type\s+)?(?:\*(?:\s+as\s+\w+)?|\{[^}]*\})\s*from\s*['"]([^'"]+)['"]/g
+  );
 
   for (const match of staticImports) imports.push(match[1]);
   for (const match of dynamicImports) imports.push(match[1]);
   for (const match of requires) imports.push(match[1]);
+  for (const match of reExports) imports.push(match[1]);
 
   return [...new Set(imports)];
 }
@@ -517,14 +521,56 @@ export function loadIndex(repoRoot: string): RepoIndex | null {
 }
 
 /**
- * Get or generate index
+ * Check whether a cached index is stale relative to the working tree:
+ * stale when the file set differs or any indexed file was modified after
+ * the index was generated.
+ */
+export async function isIndexStale(
+  index: RepoIndex,
+  options: ScanOptions = {}
+): Promise<boolean> {
+  const repoRoot = options.root || process.cwd();
+  const patterns = options.include?.length ? options.include : DEFAULT_PATTERNS;
+  const ignore = [...DEFAULT_IGNORE, ...(options.exclude || [])];
+
+  const generatedAtMs = Date.parse(index.generatedAt);
+  if (Number.isNaN(generatedAtMs)) return true;
+
+  const entries = await fg(patterns, {
+    cwd: repoRoot,
+    ignore,
+    absolute: false,
+    stats: true,
+  });
+
+  if (entries.length !== index.files.length) return true;
+
+  const indexed = new Set(index.files.map((f) => f.relativePath));
+  for (const entry of entries) {
+    if (!indexed.has(entry.path)) return true;
+    if (entry.stats && entry.stats.mtimeMs > generatedAtMs) return true;
+  }
+
+  return false;
+}
+
+/**
+ * Get or generate index. A cached index is only served when it is still
+ * fresh; otherwise the repo is re-indexed and the cache updated.
  */
 export async function getIndex(options: ScanOptions = {}): Promise<RepoIndex> {
   const repoRoot = options.root || process.cwd();
 
   if (!options.refresh) {
     const existing = loadIndex(repoRoot);
-    if (existing) return existing;
+    if (existing && !(await isIndexStale(existing, options))) {
+      return existing;
+    }
+    if (existing) {
+      const fresh = await generateIndex(options);
+      saveIndex(fresh, path.join(repoRoot, ".repointel"));
+      return fresh;
+    }
   }
 
   return generateIndex(options);

@@ -165,16 +165,18 @@ export function extractRouteParams(routePath: string): string[] {
  * Simple glob pattern matching
  */
 export function matchesPattern(filePath: string, pattern: string): boolean {
-  const regex = new RegExp(
-    "^" +
-      pattern
-        .replace(/\*\*/g, "{{DOUBLESTAR}}")
-        .replace(/\*/g, "[^/]*")
-        .replace(/{{DOUBLESTAR}}/g, ".*")
-        .replace(/\./g, "\\.") +
-      "$"
+  // Single-pass translation: glob tokens and regex escapes are handled in one
+  // replace so injected regex text is never re-scanned by a later substitution.
+  const regexStr = pattern.replace(
+    /\*\*\/|\*\*|\*|[.+?^${}()|[\]\\]/g,
+    (token) => {
+      if (token === "**/") return "(?:.*/)?";
+      if (token === "**") return ".*";
+      if (token === "*") return "[^/]*";
+      return "\\" + token;
+    }
   );
-  return regex.test(filePath);
+  return new RegExp("^" + regexStr + "$").test(filePath);
 }
 
 /**
