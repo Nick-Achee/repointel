@@ -37,7 +37,7 @@
   },
   "homepage": "https://github.com/Nick-Achee/repointel#readme",
   "engines": {
-    "node": ">=18"
+    "node": ">=20.12"
   },
   "keywords": [
     "repo-intel",

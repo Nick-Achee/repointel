@@ -10,6 +10,6 @@ export default defineConfig({
   dts: true,
   clean: true,
   sourcemap: true,
-  target: "node18",
+  target: "node20",
   shims: true,
 });

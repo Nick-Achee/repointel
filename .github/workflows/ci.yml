@@ -16,8 +16,9 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # package.json declares engines.node >= 18
-        node: ["18", "20", "22"]
+        # engines.node is >=20.12: @inquirer/prompts uses node:util styleText,
+        # which does not exist before Node 20.12.
+        node: ["20.12", "22", "24"]
 
     steps:
       - uses: actions/checkout@v4
