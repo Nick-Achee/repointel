@@ -133,6 +133,13 @@ describe("repointel MCP server", () => {
 
     expect(payload.impact.direct).toContain("src/auth/login.ts");
     expect(payload.impact.totalAffected).toBeGreaterThan(0);
+
+    // Each affected file must explain itself: depth, the edge, the line.
+    const detail = payload.impact.details.find(
+      (d: { file: string }) => d.file === "src/auth/login.ts"
+    );
+    expect(detail).toMatchObject({ depth: 1, via: "src/db.ts" });
+    expect(detail.line).toBeGreaterThan(0);
   });
 
   it("reports an unusable seed as an error result instead of throwing", async () => {

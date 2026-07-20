@@ -111,6 +111,8 @@ export function createRepointelServer(): McpServer {
             direct: impact.direct,
             transitive: impact.transitive,
             totalAffected: impact.all.length,
+            // Why each file is affected: depth, edge, bindings, import line.
+            details: impact.details,
           };
         }
 
