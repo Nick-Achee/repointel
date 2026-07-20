@@ -82,30 +82,45 @@ export async function scanCommand(options: ScanCommandOptions): Promise<void> {
     console.log(`    ${pc.dim(type.padEnd(12))} ${count}`);
   }
 
-  console.log("");
-  console.log(pc.bold("  Rendering:"));
-  console.log(`    ${pc.dim("Client:")}     ${index.summary.clientComponents}`);
-  console.log(`    ${pc.dim("Server:")}     ${index.summary.serverComponents}`);
+  // React-specific sections are omitted entirely for non-React projects.
+  const { clientComponents, serverComponents, totalDataUsage, totalHooks } =
+    index.summary;
 
-  console.log("");
-  console.log(pc.bold("  Data Usage:"));
-  console.log(`    ${pc.dim("useQuery:")}   ${index.summary.totalDataUsage.useQuery}`);
-  console.log(`    ${pc.dim("useMutation:")} ${index.summary.totalDataUsage.useMutation}`);
-  console.log(`    ${pc.dim("fetch:")}      ${index.summary.totalDataUsage.fetch}`);
+  if (clientComponents !== undefined && serverComponents !== undefined) {
+    console.log("");
+    console.log(pc.bold("  Rendering:"));
+    console.log(`    ${pc.dim("Client:")}     ${clientComponents}`);
+    console.log(`    ${pc.dim("Server:")}     ${serverComponents}`);
+  }
 
-  console.log("");
-  console.log(pc.bold("  Top Hooks:"));
-  const hookEntries = Object.entries(index.summary.totalHooks)
-    .filter(([, count]) => count > 0)
-    .sort(([, a], [, b]) => b - a)
-    .slice(0, 5);
+  if (totalDataUsage) {
+    console.log("");
+    console.log(pc.bold("  Data Usage:"));
+    console.log(`    ${pc.dim("useQuery:")}   ${totalDataUsage.useQuery}`);
+    console.log(`    ${pc.dim("useMutation:")} ${totalDataUsage.useMutation}`);
+    console.log(`    ${pc.dim("fetch:")}      ${totalDataUsage.fetch}`);
+  }
 
-  for (const [hook, count] of hookEntries) {
-    console.log(`    ${pc.dim(hook.padEnd(16))} ${count}`);
+  if (totalHooks) {
+    const hookEntries = Object.entries(totalHooks)
+      .filter(([, count]) => count > 0)
+      .sort(([, a], [, b]) => b - a)
+      .slice(0, 5);
+
+    if (hookEntries.length > 0) {
+      console.log("");
+      console.log(pc.bold("  Top Hooks:"));
+      for (const [hook, count] of hookEntries) {
+        console.log(`    ${pc.dim(hook.padEnd(16))} ${count}`);
+      }
+    }
   }
 
   // Show anti-patterns if any detected
-  const antiPatternEntries = Object.entries(index.summary.totalAntiPatterns)
+  const antiPatternEntries = Object.entries(
+    index.summary.totalAntiPatterns ?? {}
+  )
+    .map(([pattern, count]) => [pattern, count as number] as const)
     .filter(([, count]) => count > 0)
     .sort(([, a], [, b]) => b - a);
 

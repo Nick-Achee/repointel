@@ -49,6 +49,134 @@ describe("generateIndex import extraction", () => {
   });
 });
 
+describe("import extraction precision", () => {
+  it("ignores import statements inside string literals and comments", async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "repointel-phantom-"));
+    try {
+      fs.mkdirSync(path.join(root, "src"), { recursive: true });
+      fs.writeFileSync(path.join(root, "src/real.ts"), "export const real = 1;");
+      fs.writeFileSync(path.join(root, "src/ghost.ts"), "export const ghost = 1;");
+      fs.writeFileSync(
+        path.join(root, "src/fixture.ts"),
+        [
+          'import { real } from "./real";',
+          '// import { ghost } from "./ghost";',
+          'const code = \'import { ghost } from "./ghost";\';',
+          "export const f = [real, code];",
+        ].join("\n")
+      );
+
+      const index = await generateIndex({ root });
+      const fixture = index.files.find(
+        (f) => f.relativePath === "src/fixture.ts"
+      );
+
+      expect(fixture?.imports).toContain("./real");
+      expect(fixture?.imports).not.toContain("./ghost");
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("index exclusion disclosure", () => {
+  it("discloses what it excluded instead of presenting a partial count as the total", async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "repointel-excl-"));
+    try {
+      fs.mkdirSync(path.join(root, "src"), { recursive: true });
+      fs.writeFileSync(path.join(root, "src/a.ts"), "export const a = 1;");
+      fs.writeFileSync(path.join(root, "src/a.test.ts"), 'import "./a";');
+      fs.writeFileSync(path.join(root, "src/b.spec.ts"), 'import "./a";');
+
+      const index = await generateIndex({ root });
+
+      expect(index.summary.totalFiles).toBe(1);
+      expect(index.excludedFromIndex?.tests).toBe(2);
+      expect(index.excludedFromIndex?.patterns.length).toBeGreaterThan(0);
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("indexes test files when includeTests is set, so impact analysis can see them", async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "repointel-excl2-"));
+    try {
+      fs.mkdirSync(path.join(root, "src"), { recursive: true });
+      fs.writeFileSync(path.join(root, "src/a.ts"), "export const a = 1;");
+      fs.writeFileSync(path.join(root, "src/a.test.ts"), 'import "./a";');
+
+      const index = await generateIndex({ root, includeTests: true });
+
+      expect(index.files.map((f) => f.relativePath)).toContain("src/a.test.ts");
+      expect(index.excludedFromIndex?.tests).toBe(0);
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("framework detection", () => {
+  it("ignores node_modules and dist when detecting frameworks", async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "repointel-fw-"));
+    try {
+      const write = (rel: string, content: string) => {
+        const abs = path.join(root, rel);
+        fs.mkdirSync(path.dirname(abs), { recursive: true });
+        fs.writeFileSync(abs, content);
+      };
+      write("src/cli.ts", "export const cli = 1;");
+      write("node_modules/hono/dist/server.js", "module.exports = {};");
+      write("dist/server.js", "export const x = 1;");
+
+      const index = await generateIndex({ root });
+      expect(index.frameworks.map((f) => f.name)).not.toContain("express");
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("does not claim a framework the project does not depend on", async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "repointel-fw2-"));
+    try {
+      fs.mkdirSync(path.join(root, "src"), { recursive: true });
+      // A CLI with its own server.ts, but no express dependency.
+      fs.writeFileSync(
+        path.join(root, "package.json"),
+        JSON.stringify({ name: "cli", dependencies: { commander: "^12.0.0" } })
+      );
+      fs.writeFileSync(
+        path.join(root, "src/server.ts"),
+        "export const server = 1;"
+      );
+
+      const index = await generateIndex({ root });
+      expect(index.frameworks.map((f) => f.name)).not.toContain("express");
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("detects a framework the project actually depends on", async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "repointel-fw3-"));
+    try {
+      fs.mkdirSync(path.join(root, "src"), { recursive: true });
+      fs.writeFileSync(
+        path.join(root, "package.json"),
+        JSON.stringify({ name: "api", dependencies: { express: "^4.19.0" } })
+      );
+      fs.writeFileSync(
+        path.join(root, "src/server.ts"),
+        'import express from "express";\nexport const app = express();'
+      );
+
+      const index = await generateIndex({ root });
+      expect(index.frameworks.map((f) => f.name)).toContain("express");
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+});
+
 describe("getIndex staleness", () => {
   it("re-indexes automatically when a new file appears after the cached index", async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "repointel-stale-"));

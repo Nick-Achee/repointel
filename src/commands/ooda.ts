@@ -14,16 +14,24 @@ import {
   type SpecKitFeature,
 } from "../core/speckit.js";
 import { sliceFeature } from "../core/slicer.js";
-import { ensureDir, readFileSafe } from "../core/utils.js";
+import {
+  ensureDir,
+  readFileSafe,
+  getGitState,
+  getProjectIdentity,
+} from "../core/utils.js";
 import type { RepoIndex } from "../types/index.js";
 
 export interface OodaCommandOptions {
+  /** Repository root; defaults to the current working directory */
+  root?: string;
   refresh?: boolean;
   output?: string;
   focus?: string;
   yes?: boolean;
   interactive?: boolean;
   json?: boolean;
+  includeTests?: boolean;
 }
 
 interface Constitution {
@@ -53,7 +61,7 @@ interface OodaState {
  * context for the D (Decide) phase, which is handled by your LLM of choice.
  */
 export async function oodaCommand(options: OodaCommandOptions): Promise<void> {
-  const root = process.cwd();
+  const root = options.root || process.cwd();
 
   if (options.json) {
     return oodaJsonCommand(root, options);
@@ -208,7 +216,9 @@ function generateActions(state: OodaState): Action[] {
 
   // Priority 1: Fix anti-patterns (aligns with quality principles)
   if (index) {
-    const antiPatternCount = Object.values(index.summary.totalAntiPatterns).reduce((a, b) => a + b, 0);
+    const antiPatternCount = Object.values(
+      index.summary.totalAntiPatterns ?? {}
+    ).reduce((a: number, b: number) => a + b, 0);
     if (antiPatternCount > 0) {
       actions.push({
         title: `Fix ${antiPatternCount} anti-pattern(s)`,
@@ -340,7 +350,11 @@ export async function buildOodaPayload(
   options: OodaCommandOptions
 ): Promise<Record<string, unknown>> {
   // OBSERVE — getIndex is staleness-aware, so this is always current
-  const index = await getIndex({ root, refresh: options.refresh });
+  const index = await getIndex({
+    root,
+    refresh: options.refresh,
+    includeTests: options.includeTests,
+  });
   saveIndex(index, path.join(root, ".repointel"));
 
   // ORIENT — read-only
@@ -355,8 +369,23 @@ export async function buildOodaPayload(
   const state = await gatherState(root, options);
   state.index = index;
 
-  // DECIDE — same action generation as interactive mode
+  const git = getGitState(root);
+  const project = getProjectIdentity(root);
+
+  // DECIDE — working-tree reality outranks spec state: uncommitted work is
+  // what is actually in flight, regardless of what tasks.md claims.
   const actions = generateActions(state);
+  const changedCount = git.uncommittedFiles.length + git.untrackedFiles.length;
+  if (changedCount > 0) {
+    const sample = [...git.uncommittedFiles, ...git.untrackedFiles].slice(0, 5);
+    actions.unshift({
+      title: `Finish uncommitted work (${changedCount} changed file${changedCount === 1 ? "" : "s"})`,
+      description: `Working tree has in-flight changes on ${git.branch || "HEAD"}: ${sample.join(", ")}${changedCount > sample.length ? ", …" : ""}`,
+      command: "git status --short",
+      why: "Uncommitted changes are the real current state — finish or commit them before starting new work",
+      type: "fix",
+    });
+  }
 
   const decisionContext = await generateDecisionContext(state, options);
   const promptsDir = path.join(root, ".repointel", "prompts");
@@ -366,11 +395,16 @@ export async function buildOodaPayload(
 
   const payload = {
     root,
+    project,
+    git,
     observe: {
       files: index.summary.totalFiles,
       totalSizeBytes: index.summary.totalSizeBytes,
       frameworks: index.frameworks,
       byType: index.summary.byType,
+      excludedFromIndex: index.excludedFromIndex,
+      // Which of the fields above are counted vs guessed.
+      provenance: index.provenance,
     },
     orient: {
       features: (state.speckit?.features ?? []).map((f) => ({
@@ -441,11 +475,15 @@ async function gatherState(root: string, options: OodaCommandOptions): Promise<O
   if (speckit && options.focus) {
     currentFeature = findFeature(speckit, options.focus) ?? null;
   } else if (speckit && speckit.features.length > 0) {
-    // Auto-detect: find in-progress feature
-    currentFeature = speckit.features.find(f => {
-      const inProgress = f.tasks?.filter(t => t.status === "in-progress") || [];
-      return inProgress.length > 0;
-    }) || speckit.features[speckit.features.length - 1];
+    // Evidence order: work marked in-progress, then work still unfinished,
+    // then (last resort) the newest feature directory.
+    const hasStatus = (f: SpecKitFeature, status: string) =>
+      (f.tasks || []).some((t) => t.status === status);
+
+    currentFeature =
+      speckit.features.find((f) => hasStatus(f, "in-progress")) ||
+      speckit.features.find((f) => hasStatus(f, "pending")) ||
+      speckit.features[speckit.features.length - 1];
   }
 
   return {
@@ -586,14 +624,19 @@ ${Object.entries(index.summary.byType)
   .map(([type, count]) => `- ${type}: ${count}`)
   .join("\n")}
 
-### Code Quality
+${
+  index.summary.clientComponents !== undefined
+    ? `### Code Quality
 - Client components: ${index.summary.clientComponents}
 - Server components: ${index.summary.serverComponents}
-`;
+`
+    : ""
+}`;
 
     // Anti-patterns
-    const antiPatterns = Object.entries(index.summary.totalAntiPatterns)
-      .filter(([, count]) => count > 0);
+    const antiPatterns = Object.entries(
+      index.summary.totalAntiPatterns ?? {}
+    ).filter(([, count]) => (count as number) > 0);
     if (antiPatterns.length > 0) {
       context += `
 ### ⚠️ Anti-Patterns Detected
@@ -795,7 +838,9 @@ function printStateSummary(state: OodaState): void {
     console.log(`  ${pc.dim("Files:")}        ${index.summary.totalFiles}`);
     console.log(`  ${pc.dim("Frameworks:")}   ${index.frameworks.map(f => f.name).join(", ") || "None"}`);
 
-    const antiPatterns = Object.values(index.summary.totalAntiPatterns).reduce((a, b) => a + b, 0);
+    const antiPatterns = Object.values(
+      index.summary.totalAntiPatterns ?? {}
+    ).reduce((a: number, b: number) => a + b, 0);
     if (antiPatterns > 0) {
       console.log(`  ${pc.dim("Anti-patterns:")} ${pc.yellow(String(antiPatterns))}`);
     }

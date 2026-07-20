@@ -85,6 +85,56 @@ describe("repointel MCP server", () => {
     expect(payload.slice.contextPack).toMatch(/\.repointel\/slices\/.*\.md$/);
   });
 
+  it("answers 'what is this project' with identity from package.json and README", async () => {
+    fs.writeFileSync(
+      path.join(repoRoot, "package.json"),
+      JSON.stringify({
+        name: "acme-auth",
+        version: "2.1.0",
+        description: "Authentication service for Acme",
+        bin: { "acme-auth": "dist/cli.js" },
+      })
+    );
+    fs.writeFileSync(
+      path.join(repoRoot, "README.md"),
+      "# acme-auth\n\n> Handles login, sessions, and password reset.\n\n## Install\n"
+    );
+
+    const result = await client.callTool({
+      name: "repo_intel",
+      arguments: { root: repoRoot, refresh: true },
+    });
+    const payload = callResult(result);
+
+    expect(payload.project.name).toBe("acme-auth");
+    expect(payload.project.version).toBe("2.1.0");
+    expect(payload.project.description).toBe("Authentication service for Acme");
+    expect(payload.project.readme).toMatch(/login, sessions/);
+  });
+
+  it("reports real working-tree state so recommendations reflect reality", async () => {
+    const result = await client.callTool({
+      name: "repo_intel",
+      arguments: { root: repoRoot },
+    });
+    const payload = callResult(result);
+
+    expect(payload.git).toBeDefined();
+    expect(payload.git).toHaveProperty("isRepo");
+    expect(payload.git).toHaveProperty("uncommittedFiles");
+  });
+
+  it("returns impact analysis (who imports the seeds) alongside the slice", async () => {
+    const result = await client.callTool({
+      name: "repo_intel",
+      arguments: { root: repoRoot, seeds: ["src/db.ts"], name: "impact" },
+    });
+    const payload = callResult(result);
+
+    expect(payload.impact.direct).toContain("src/auth/login.ts");
+    expect(payload.impact.totalAffected).toBeGreaterThan(0);
+  });
+
   it("reports an unusable seed as an error result instead of throwing", async () => {
     const result: any = await client.callTool({
       name: "repo_intel",

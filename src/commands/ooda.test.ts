@@ -5,10 +5,8 @@ import * as path from "node:path";
 import { oodaCommand } from "./ooda.js";
 
 let repoRoot: string;
-let prevCwd: string;
 
 beforeAll(() => {
-  prevCwd = process.cwd();
   repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), "repointel-ooda-"));
   fs.mkdirSync(path.join(repoRoot, "src"));
   fs.writeFileSync(
@@ -24,12 +22,47 @@ beforeAll(() => {
     ["# Tasks", "- [x] Set up project", "- [~] Build login", "- [ ] Wire mailer"].join("\n")
   );
 
-  process.chdir(repoRoot);
 });
 
 afterAll(() => {
-  process.chdir(prevCwd);
   fs.rmSync(repoRoot, { recursive: true, force: true });
+});
+
+describe("currentFeature selection", () => {
+  it("picks the feature with unfinished work, not the highest-numbered directory", async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "repointel-feat-"));
+        try {
+      fs.mkdirSync(path.join(root, "src"), { recursive: true });
+      fs.writeFileSync(path.join(root, "src/a.ts"), "export const a = 1;");
+
+      const mkFeature = (id: string, tasks: string[]) => {
+        const dir = path.join(root, ".specify", "specs", id);
+        fs.mkdirSync(dir, { recursive: true });
+        fs.writeFileSync(path.join(dir, "tasks.md"), ["# Tasks", ...tasks].join("\n"));
+      };
+      // Nothing is marked in-progress anywhere. 001 has real pending work;
+      // 002 is fully shipped but sorts last.
+      mkFeature("001-unfinished", ["- [x] Step one", "- [ ] Step two"]);
+      mkFeature("002-shipped", ["- [x] All done", "- [x] Also done"]);
+
+      const lines: string[] = [];
+      const spy = vi
+        .spyOn(console, "log")
+        .mockImplementation((...args: unknown[]) => {
+          lines.push(args.join(" "));
+        });
+      try {
+        await oodaCommand({ root, json: true, refresh: true });
+      } finally {
+        spy.mockRestore();
+      }
+
+      const parsed = JSON.parse(lines.join("\n"));
+      expect(parsed.orient.currentFeature.id).toBe("001-unfinished");
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
 });
 
 describe("ooda --json", () => {
@@ -42,7 +75,7 @@ describe("ooda --json", () => {
       });
 
     try {
-      await oodaCommand({ json: true });
+      await oodaCommand({ root: repoRoot, json: true });
     } finally {
       spy.mockRestore();
     }

@@ -1,0 +1,13 @@
+{
+  "mcpServers": {
+    "repointel": {
+      "type": "stdio",
+      "command": "node",
+      "args": [
+        "/Users/nick/subs-apps/repointel/dist/bin/cli.js",
+        "mcp"
+      ],
+      "env": {}
+    }
+  }
+}

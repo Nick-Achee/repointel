@@ -33,6 +33,8 @@ export {
 export {
   buildDepGraph,
   buildDepGraphFromSeeds,
+  expandSeeds,
+  findDependents,
   saveDepGraph,
   loadDepGraph,
   depGraphToMermaid,

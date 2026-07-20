@@ -68,6 +68,7 @@ export type FileType =
   | "type"
   | "config"
   | "api"       // tRPC/REST handlers
+  | "cli"       // CLI entry points and command modules
   | "schema"    // DB schema files
   | "unknown";
 
@@ -79,7 +80,11 @@ export interface FileInfo {
   isClientComponent: boolean;
   isDynamicImport: boolean;
   imports: string[];
+  /** Per-import detail: which bindings come from which module specifier */
+  importBindings?: Record<string, string[]>;
   exports: string[];
+  /** Exported symbol -> sibling exports its body references (delegation) */
+  symbolRefs?: Record<string, string[]>;
   hooks: HookCounts;
   sideEffects: SideEffectCounts;
   data: DataCounts;
@@ -131,15 +136,29 @@ export interface RepoIndex {
   files: FileInfo[];
   frameworks: DetectedFramework[];
   specs: DetectedSpec[];
+  /** What the index deliberately left out, so counts are not mistaken for totals */
+  excludedFromIndex?: {
+    patterns: string[];
+    tests: number;
+  };
+  /**
+   * Which fields are counted facts vs heuristic guesses. Consumers must not
+   * treat an inferred label with the same confidence as a measured count.
+   */
+  provenance?: {
+    measured: string[];
+    inferred: Record<string, string>;
+  };
   summary: {
     totalFiles: number;
     byType: Record<FileType, number>;
-    clientComponents: number;
-    serverComponents: number;
-    totalHooks: HookCounts;
-    totalSideEffects: SideEffectCounts;
-    totalDataUsage: DataCounts;
-    totalAntiPatterns: AntiPatternCounts;
+    /** React-only metrics; omitted entirely when the project has no React dependency */
+    clientComponents?: number;
+    serverComponents?: number;
+    totalHooks?: HookCounts;
+    totalSideEffects?: SideEffectCounts;
+    totalDataUsage?: DataCounts;
+    totalAntiPatterns?: AntiPatternCounts;
     totalSizeBytes: number;
   };
 }
@@ -155,6 +174,8 @@ export interface DepNode {
   isExternal: boolean;
   isCircular?: boolean;
   depth?: number;          // depth from seed file
+  /** Exported symbol -> sibling exports its body references (delegation) */
+  symbolRefs?: Record<string, string[]>;
 }
 
 export interface DepEdge {
@@ -162,6 +183,8 @@ export interface DepEdge {
   to: string;              // target file relativePath
   type: "static" | "dynamic" | "type-only";
   symbol?: string;         // specific export imported
+  /** Named bindings carried by this import ("*" for namespace, "default" for default) */
+  symbols?: string[];
 }
 
 export interface DepGraph {
@@ -397,6 +420,8 @@ export interface ScanOptions {
   refresh?: boolean;
   include?: string[];
   exclude?: string[];
+  /** Index test/spec files too (excluded by default) */
+  includeTests?: boolean;
 }
 
 export interface GraphOptions {
@@ -405,6 +430,8 @@ export interface GraphOptions {
   format?: "json" | "mermaid";
   depth?: number;
   seeds?: string[];
+  /** Include test/spec files as graph nodes (needed for complete impact analysis) */
+  includeTests?: boolean;
 }
 
 // =============================================================================

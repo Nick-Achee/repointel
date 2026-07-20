@@ -2,6 +2,7 @@ import * as path from "node:path";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { buildOodaPayload } from "../commands/ooda.js";
+import { buildDepGraph, findDependents } from "../core/dep-graph.js";
 import {
   sliceFeature,
   generateContextPack,
@@ -54,13 +55,30 @@ export function createRepointelServer(): McpServer {
           .boolean()
           .optional()
           .describe("Force a full re-index (staleness is detected automatically)."),
+        includeTests: z
+          .boolean()
+          .optional()
+          .describe(
+            "Index test/spec files too. Off by default; observe.excludedFromIndex " +
+              "always reports how many were left out. Turn on for complete impact analysis."
+          ),
+        symbol: z
+          .string()
+          .optional()
+          .describe(
+            "Narrow impact analysis to one exported name, e.g. 'matchesPattern'. " +
+              "Only files that actually import that binding count as directly affected."
+          ),
       },
     },
-    async ({ root, seeds, name, refresh }) => {
+    async ({ root, seeds, name, refresh, includeTests, symbol }) => {
       const repoRoot = root || process.cwd();
 
       try {
-        const payload = await buildOodaPayload(repoRoot, { refresh });
+        const payload = await buildOodaPayload(repoRoot, {
+          refresh,
+          includeTests,
+        });
 
         if (seeds && seeds.length > 0) {
           const sliceName = name || "context";
@@ -82,6 +100,17 @@ export function createRepointelServer(): McpServer {
             estimatedTokens: slice.summary.totalTokens,
             excluded: slice.excluded,
             contextPack: path.relative(repoRoot, packPath),
+          };
+
+          // Impact analysis: who breaks if the seeds change (reverse deps)
+          const graph = await buildDepGraph({ root: repoRoot, includeTests });
+          const impact = findDependents(graph, slice.seedFiles, { symbol });
+          (payload as Record<string, unknown>).impact = {
+            of: slice.seedFiles,
+            symbol: symbol ?? null,
+            direct: impact.direct,
+            transitive: impact.transitive,
+            totalAffected: impact.all.length,
           };
         }
 

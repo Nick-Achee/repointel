@@ -26,7 +26,7 @@ import {
   readJson,
 } from "./utils.js";
 
-const INDEX_VERSION = "1.0.0";
+const INDEX_VERSION = "1.1.0";
 
 /**
  * Default file patterns to scan
@@ -60,16 +60,34 @@ const FRAMEWORK_DETECTION = {
 };
 
 /**
+ * Packages whose presence in package.json is required before the corresponding
+ * file patterns may claim a framework. Generic filenames like `server.ts` are
+ * otherwise a false-positive machine.
+ */
+const FRAMEWORK_PACKAGES: Record<string, string[]> = {
+  nextjs: ["next"],
+  convex: ["convex"],
+  remix: ["@remix-run/react", "@remix-run/node", "remix"],
+  astro: ["astro"],
+  vite: ["vite"],
+  express: ["express"],
+};
+
+/**
  * Default patterns to ignore
  */
+const TEST_IGNORE = [
+  "**/*.test.{ts,tsx,js,jsx}",
+  "**/*.spec.{ts,tsx,js,jsx}",
+  "**/__tests__/**",
+];
+
 const DEFAULT_IGNORE = [
   "**/node_modules/**",
   "**/.next/**",
   "**/dist/**",
   "**/build/**",
-  "**/*.test.{ts,tsx,js,jsx}",
-  "**/*.spec.{ts,tsx,js,jsx}",
-  "**/__tests__/**",
+  ...TEST_IGNORE,
   "**/convex/_generated/**",
   "**/*.d.ts",
 ];
@@ -88,9 +106,11 @@ function inferFileType(filePath: string): FileType {
   if (filePath.includes("/not-found.")) return "error";
   if (filePath.includes("/route.")) return "route";
   if (filePath.includes("middleware.")) return "middleware";
-  // CLI/tooling patterns
-  if (filePath.match(/\/bin\//i) || filePath.match(/\/cli\./i)) return "api";
-  if (filePath.match(/\/commands?\//i)) return "api";
+  // CLI/tooling patterns — a command module is not an HTTP endpoint
+  if (filePath.match(/\/bin\//i) || filePath.match(/\/cli\./i)) return "cli";
+  if (filePath.match(/\/commands?\//i)) return "cli";
+  // An MCP server is a request-serving surface, not a UI component
+  if (filePath.match(/\/mcp\//i)) return "api";
   if (filePath.match(/\/generators?\//i)) return "lib";
   if (filePath.match(/\/validators?\//i)) return "lib";
   if (filePath.match(/\/core\//i)) return "lib";
@@ -110,13 +130,16 @@ function inferFileType(filePath: string): FileType {
  */
 function extractImports(content: string): string[] {
   const imports: string[] = [];
-  const staticImports = content.matchAll(
-    /import\s+(?:[\w\s{},*]+\s+from\s+)?['"]([^'"]+)['"]/g
+  const source = stripComments(content);
+  // Module-level import/export statements start a line; anchoring keeps
+  // import statements that appear inside string literals out of the graph.
+  const staticImports = source.matchAll(
+    /^[ \t]*import\s+(?:[\w\s{},*$]+\s+from\s+)?['"]([^'"]+)['"]/gm
   );
-  const dynamicImports = content.matchAll(/import\s*\(\s*['"]([^'"]+)['"]\s*\)/g);
-  const requires = content.matchAll(/require\s*\(\s*['"]([^'"]+)['"]\s*\)/g);
-  const reExports = content.matchAll(
-    /export\s+(?:type\s+)?(?:\*(?:\s+as\s+\w+)?|\{[^}]*\})\s*from\s*['"]([^'"]+)['"]/g
+  const dynamicImports = source.matchAll(/import\s*\(\s*['"]([^'"]+)['"]\s*\)/g);
+  const requires = source.matchAll(/require\s*\(\s*['"]([^'"]+)['"]\s*\)/g);
+  const reExports = source.matchAll(
+    /^[ \t]*export\s+(?:type\s+)?(?:\*(?:\s+as\s+\w+)?|\{[^}]*\})\s*from\s*['"]([^'"]+)['"]/gm
   );
 
   for (const match of staticImports) imports.push(match[1]);
@@ -125,6 +148,151 @@ function extractImports(content: string): string[] {
   for (const match of reExports) imports.push(match[1]);
 
   return [...new Set(imports)];
+}
+
+/**
+ * Remove line and block comments so commented-out imports never become edges.
+ * String literals are preserved because module specifiers live inside them.
+ */
+function stripComments(content: string): string {
+  let out = "";
+  let inString: string | null = null;
+  let inLine = false;
+  let inBlock = false;
+
+  for (let i = 0; i < content.length; i++) {
+    const ch = content[i];
+    const next = content[i + 1];
+
+    if (inLine) {
+      if (ch === "\n") {
+        inLine = false;
+        out += ch;
+      }
+      continue;
+    }
+    if (inBlock) {
+      if (ch === "*" && next === "/") {
+        inBlock = false;
+        i++;
+      } else if (ch === "\n") {
+        out += ch;
+      }
+      continue;
+    }
+    if (inString) {
+      out += ch;
+      if (ch === "\\" && next !== undefined) {
+        out += next;
+        i++;
+      } else if (ch === inString) {
+        inString = null;
+      }
+      continue;
+    }
+    if (ch === '"' || ch === "'" || ch === "`") {
+      inString = ch;
+      out += ch;
+      continue;
+    }
+    if (ch === "/" && next === "/") {
+      inLine = true;
+      continue;
+    }
+    if (ch === "/" && next === "*") {
+      inBlock = true;
+      i++;
+      continue;
+    }
+    out += ch;
+  }
+
+  return out;
+}
+
+/**
+ * Extract which named bindings come from which module specifier.
+ * `*` denotes a namespace import, `default` a default import.
+ */
+function extractImportBindings(content: string): Record<string, string[]> {
+  const bindings: Record<string, string[]> = {};
+  const add = (source: string, names: string[]) => {
+    const list = bindings[source] || (bindings[source] = []);
+    for (const name of names) if (name && !list.includes(name)) list.push(name);
+  };
+
+  const parseClause = (clause: string): string[] => {
+    const names: string[] = [];
+    const braced = clause.match(/\{([^}]*)\}/);
+    if (braced) {
+      for (const part of braced[1].split(",")) {
+        const name = part.trim().split(/\s+as\s+/)[0].replace(/^type\s+/, "").trim();
+        if (name) names.push(name);
+      }
+    }
+    const withoutBraces = clause.replace(/\{[^}]*\}/, "");
+    if (/\*\s+as\s+\w+/.test(withoutBraces)) names.push("*");
+    const defaultName = withoutBraces
+      .replace(/\*\s+as\s+\w+/, "")
+      .replace(/^\s*type\s+/, "")
+      .split(",")[0]
+      ?.trim();
+    if (defaultName && /^\w+$/.test(defaultName)) names.push("default");
+    return names;
+  };
+
+  const source = stripComments(content);
+
+  // import <clause> from "source" — anchored to line start (see extractImports)
+  for (const m of source.matchAll(
+    /^[ \t]*import\s+([^'"]*?)\s+from\s+['"]([^'"]+)['"]/gm
+  )) {
+    add(m[2], parseClause(m[1]));
+  }
+  // export { a, b } from "source" / export * from "source"
+  for (const m of source.matchAll(
+    /^[ \t]*export\s+(?:type\s+)?(\*(?:\s+as\s+\w+)?|\{[^}]*\})\s*from\s*['"]([^'"]+)['"]/gm
+  )) {
+    add(m[2], m[1].trim().startsWith("*") ? ["*"] : parseClause(m[1]));
+  }
+
+  return bindings;
+}
+
+/**
+ * Map each exported symbol to the sibling exports its body references.
+ * A wrapper that delegates to another export means consumers of the wrapper
+ * are affected when the delegate changes.
+ */
+function extractSymbolRefs(
+  content: string,
+  exportNames: string[]
+): Record<string, string[]> {
+  const source = stripComments(content);
+  const refs: Record<string, string[]> = {};
+  if (exportNames.length === 0) return refs;
+
+  // Split the file at top-level export declarations; each chunk is that
+  // symbol's body (approximate but adequate at file granularity).
+  const declRe =
+    /^[ \t]*export\s+(?:async\s+)?(?:const|let|var|function|class)\s+(\w+)/gm;
+  const marks: Array<{ name: string; start: number }> = [];
+  for (const m of source.matchAll(declRe)) {
+    marks.push({ name: m[1], start: m.index ?? 0 });
+  }
+
+  for (let i = 0; i < marks.length; i++) {
+    const { name, start } = marks[i];
+    const end = i + 1 < marks.length ? marks[i + 1].start : source.length;
+    const body = source.slice(start, end);
+    const referenced = exportNames.filter(
+      (other) =>
+        other !== name && new RegExp(`\\b${other}\\b`).test(body)
+    );
+    if (referenced.length > 0) refs[name] = referenced;
+  }
+
+  return refs;
 }
 
 /**
@@ -288,6 +456,8 @@ function analyzeFile(relativePath: string, repoRoot: string): FileInfo | null {
     content.replace(/\n/g, " ")
   );
 
+  const fileExports = extractExports(content);
+
   return {
     path: absolutePath,
     relativePath,
@@ -296,7 +466,9 @@ function analyzeFile(relativePath: string, repoRoot: string): FileInfo | null {
     isClientComponent,
     isDynamicImport,
     imports: extractImports(content),
-    exports: extractExports(content),
+    importBindings: extractImportBindings(content),
+    exports: fileExports,
+    symbolRefs: extractSymbolRefs(content, fileExports),
     hooks: countHooks(content),
     sideEffects: countSideEffects(content),
     data: countDataUsage(content),
@@ -391,11 +563,38 @@ function sumAntiPatterns(files: FileInfo[]): AntiPatternCounts {
 /**
  * Detect frameworks in the repository
  */
+function readDeclaredDependencies(repoRoot: string): Set<string> {
+  const content = readFileSafe(path.join(repoRoot, "package.json"));
+  if (!content) return new Set();
+  try {
+    const pkg = JSON.parse(content);
+    return new Set([
+      ...Object.keys(pkg.dependencies || {}),
+      ...Object.keys(pkg.devDependencies || {}),
+      ...Object.keys(pkg.peerDependencies || {}),
+    ]);
+  } catch {
+    return new Set();
+  }
+}
+
 async function detectFrameworks(repoRoot: string): Promise<DetectedFramework[]> {
   const frameworks: DetectedFramework[] = [];
+  const declared = readDeclaredDependencies(repoRoot);
+  const hasManifest = declared.size > 0;
 
   for (const [name, patterns] of Object.entries(FRAMEWORK_DETECTION)) {
-    const matches = await fg(patterns, { cwd: repoRoot, absolute: false });
+    // A framework is only claimed when the project declares it as a dependency.
+    const required = FRAMEWORK_PACKAGES[name] || [];
+    if (hasManifest && required.length > 0 && !required.some((p) => declared.has(p))) {
+      continue;
+    }
+
+    const matches = await fg(patterns, {
+      cwd: repoRoot,
+      ignore: DEFAULT_IGNORE,
+      absolute: false,
+    });
     if (matches.length > 0) {
       const configFile = matches.find((m) =>
         m.includes("config") || m.endsWith(".json")
@@ -417,7 +616,11 @@ async function detectSpecs(repoRoot: string): Promise<DetectedSpec[]> {
   const specs: DetectedSpec[] = [];
 
   for (const [type, patterns] of Object.entries(SPEC_PATTERNS)) {
-    const matches = await fg(patterns, { cwd: repoRoot, absolute: false });
+    const matches = await fg(patterns, {
+      cwd: repoRoot,
+      ignore: DEFAULT_IGNORE,
+      absolute: false,
+    });
     if (matches.length > 0) {
       specs.push({
         type: type as SpecType,
@@ -435,13 +638,26 @@ async function detectSpecs(repoRoot: string): Promise<DetectedSpec[]> {
 export async function generateIndex(options: ScanOptions = {}): Promise<RepoIndex> {
   const repoRoot = options.root || process.cwd();
   const patterns = options.include?.length ? options.include : DEFAULT_PATTERNS;
-  const ignore = [...DEFAULT_IGNORE, ...(options.exclude || [])];
+  const baseIgnore = options.includeTests
+    ? DEFAULT_IGNORE.filter((p) => !TEST_IGNORE.includes(p))
+    : DEFAULT_IGNORE;
+  const ignore = [...baseIgnore, ...(options.exclude || [])];
 
   const filePaths = await fg(patterns, {
     cwd: repoRoot,
     ignore,
     absolute: false,
   });
+
+  // Count what was deliberately left out so callers never mistake the file
+  // count for a repo total.
+  const excludedTests = options.includeTests
+    ? []
+    : await fg(TEST_IGNORE, {
+        cwd: repoRoot,
+        ignore: DEFAULT_IGNORE.filter((p) => !TEST_IGNORE.includes(p)),
+        absolute: false,
+      });
 
   const files: FileInfo[] = [];
   for (const filePath of filePaths) {
@@ -458,6 +674,13 @@ export async function generateIndex(options: ScanOptions = {}): Promise<RepoInde
     detectSpecs(repoRoot),
   ]);
 
+  const declaredDeps = readDeclaredDependencies(repoRoot);
+  const isReactProject =
+    declaredDeps.size === 0 ||
+    declaredDeps.has("react") ||
+    declaredDeps.has("next") ||
+    declaredDeps.has("preact");
+
   // Build type counts
   const byType: Record<FileType, number> = {
     page: 0,
@@ -472,6 +695,7 @@ export async function generateIndex(options: ScanOptions = {}): Promise<RepoInde
     type: 0,
     config: 0,
     api: 0,
+    cli: 0,
     schema: 0,
     unknown: 0,
   };
@@ -488,15 +712,47 @@ export async function generateIndex(options: ScanOptions = {}): Promise<RepoInde
     files,
     frameworks,
     specs,
+    excludedFromIndex: {
+      patterns: options.includeTests ? [] : TEST_IGNORE,
+      tests: excludedTests.length,
+    },
+    provenance: {
+      measured: [
+        "files",
+        "totalFiles",
+        "totalSizeBytes",
+        "imports",
+        "exports",
+        "excludedFromIndex",
+      ],
+      inferred: {
+        byType:
+          "path-pattern heuristic (directory and filename conventions), not semantic analysis",
+        frameworks:
+          "package.json dependency gate + file-pattern match; absence is not proof",
+        routePath: "filename-to-route convention for the detected framework",
+        ...(isReactProject
+          ? {
+              clientComponents: "'use client' directive scan",
+              totalHooks: "regex count of hook call sites",
+            }
+          : {}),
+      },
+    },
     summary: {
       totalFiles: files.length,
       byType,
-      clientComponents: files.filter((f) => f.isClientComponent).length,
-      serverComponents: files.filter((f) => !f.isClientComponent).length,
-      totalHooks: sumHooks(files),
-      totalSideEffects: sumSideEffects(files),
-      totalDataUsage: sumDataUsage(files),
-      totalAntiPatterns: sumAntiPatterns(files),
+      // React-shaped metrics are meaningless noise on a non-React project.
+      ...(isReactProject
+        ? {
+            clientComponents: files.filter((f) => f.isClientComponent).length,
+            serverComponents: files.filter((f) => !f.isClientComponent).length,
+            totalHooks: sumHooks(files),
+            totalSideEffects: sumSideEffects(files),
+            totalDataUsage: sumDataUsage(files),
+            totalAntiPatterns: sumAntiPatterns(files),
+          }
+        : {}),
       totalSizeBytes: files.reduce((sum, f) => sum + f.sizeBytes, 0),
     },
   };
@@ -531,7 +787,18 @@ export async function isIndexStale(
 ): Promise<boolean> {
   const repoRoot = options.root || process.cwd();
   const patterns = options.include?.length ? options.include : DEFAULT_PATTERNS;
-  const ignore = [...DEFAULT_IGNORE, ...(options.exclude || [])];
+  const baseIgnore = options.includeTests
+    ? DEFAULT_IGNORE.filter((p) => !TEST_IGNORE.includes(p))
+    : DEFAULT_IGNORE;
+  const ignore = [...baseIgnore, ...(options.exclude || [])];
+
+  // A cached index built with a different test policy cannot answer this request.
+  const cachedIncludesTests = (index.excludedFromIndex?.patterns.length ?? 0) === 0;
+  if (Boolean(options.includeTests) !== cachedIncludesTests) return true;
+
+  // An index written by a different analyzer version may lack fields this
+  // version reports (provenance, importBindings, …) — treat it as stale.
+  if (index.version !== INDEX_VERSION) return true;
 
   const generatedAtMs = Date.parse(index.generatedAt);
   if (Number.isNaN(generatedAtMs)) return true;

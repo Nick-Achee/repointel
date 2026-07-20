@@ -35,12 +35,38 @@ The server speaks stdio and writes nothing but protocol traffic to stdout.
    aliases; builds the dependency graph; reads SpecKit feature/task state.
 3. **Decides** — returns ranked next actions.
 
+With `seeds`, it also returns the context slice **and impact analysis** — the reverse
+dependencies, i.e. every file that breaks if the seeds change. This is the answer grep
+cannot give: grep finds direct textual importers, the graph finds the transitive closure.
+
+Measured on this repo for `src/core/utils.ts` with `includeTests: true`:
+**34 affected files** (23 direct + 11 transitive) vs **23** from `grep -rl`. The extra 11
+are files that never mention `utils` but break anyway, reached through the import chain.
+
+Add `symbol: "matchesPattern"` and it narrows to the **3 files that actually bind that
+symbol** — `src/core/slicer.ts`, `src/core/utils.test.ts`, `src/index.ts` — plus **14
+transitive consumers**. Symbol scoping follows intra-file delegation: `slicer.ts` imports
+only `matchesPatterns` (plural), but that wrapper calls `matchesPattern`, so it is
+correctly included.
+
+Honest comparison: on this question `grep -rn matchesPattern` also finds those 3 files,
+and gives line numbers the tool does not. What grep cannot produce is the **14 downstream
+files** that never mention the symbol but break through the import chain. The graph's
+advantage here is reach, not precision — text search is not worse at naming direct
+matches, and it is faster.
+
+Every payload also carries `project` (name, version, description, README tagline, entry
+points) and `git` (branch, head, uncommitted and untracked files, recent commits), so the
+recommendations in `decide` reflect the working tree rather than only what a spec claims.
+
 | Argument | Type | Purpose |
 |----------|------|---------|
 | `root` | string | Repo root. Defaults to cwd. |
 | `seeds` | string[] | Also return a context slice for these files/directories (`["src/auth/"]` — directories expand). |
 | `name` | string | Slice name. Defaults to `context`. |
 | `refresh` | boolean | Force a full re-index. |
+| `includeTests` | boolean | Index test/spec files too. Off by default; `observe.excludedFromIndex` always reports how many were left out. **Turn on for complete impact analysis** — test files are dependents too. |
+| `symbol` | string | Narrow impact to one exported name, e.g. `matchesPattern`. Only files that actually bind that symbol count as directly affected (namespace imports always count). |
 
 ## Response shape
 
@@ -67,6 +93,13 @@ The server speaks stdio and writes nothing but protocol traffic to stdout.
     "estimatedTokens": 412,
     "excluded": [],
     "contextPack": ".repointel/slices/context.md"
+  },
+  // impact analysis: who breaks if the seeds change (reverse dependencies)
+  "impact": {
+    "of": ["src/auth/login.ts"],
+    "direct": ["src/routes/session.ts"],
+    "transitive": ["src/bin/cli.ts"],
+    "totalAffected": 2
   }
 }
 ```

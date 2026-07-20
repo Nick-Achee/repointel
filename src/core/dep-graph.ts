@@ -321,7 +321,10 @@ function detectCycles(edges: Map<string, string[]>): string[][] {
  */
 export async function buildDepGraph(options: GraphOptions = {}): Promise<DepGraph> {
   const repoRoot = options.root || process.cwd();
-  const index = await getIndex({ root: repoRoot });
+  const index = await getIndex({
+    root: repoRoot,
+    includeTests: options.includeTests,
+  });
   const tsConfig = loadTsConfigPaths(repoRoot);
 
   const nodes: DepNode[] = [];
@@ -343,6 +346,7 @@ export async function buildDepGraph(options: GraphOptions = {}): Promise<DepGrap
       path: file.path,
       type: file.type,
       isExternal: false,
+      symbolRefs: file.symbolRefs,
     });
 
     const resolvedImports: string[] = [];
@@ -373,6 +377,7 @@ export async function buildDepGraph(options: GraphOptions = {}): Promise<DepGrap
           from: file.relativePath,
           to: resolvedPath,
           type: getImportType(content, importSpec),
+          symbols: file.importBindings?.[importSpec],
         });
       }
     }
@@ -581,6 +586,87 @@ export async function buildDepGraphFromSeeds(
       avgDepsPerFile: nodes.length > 0 ? edges.length / nodes.length : 0,
       maxDeps: { file: maxDepsFile, count: maxDepsCount },
     },
+  };
+}
+
+/**
+ * Reverse-dependency (impact) analysis: which files break if the targets change.
+ * `direct` = files that import a target. `transitive` = everything else upstream,
+ * excluding the targets themselves.
+ */
+export function findDependents(
+  graph: DepGraph,
+  targets: string[],
+  options: { symbol?: string } = {}
+): { direct: string[]; transitive: string[]; all: string[] } {
+  const importers = new Map<string, string[]>();
+  for (const edge of graph.edges) {
+    const list = importers.get(edge.to);
+    if (list) list.push(edge.from);
+    else importers.set(edge.to, [edge.from]);
+  }
+
+  const targetSet = new Set(targets);
+  const direct = new Set<string>();
+
+  if (options.symbol) {
+    // Changing a symbol also changes any sibling export that delegates to it,
+    // so importers of those wrappers are affected too.
+    const affectedSymbols = new Set([options.symbol]);
+    for (const target of targets) {
+      const refs = graph.nodes.find((n) => n.id === target)?.symbolRefs;
+      if (!refs) continue;
+      let grew = true;
+      while (grew) {
+        grew = false;
+        for (const [exported, referenced] of Object.entries(refs)) {
+          if (affectedSymbols.has(exported)) continue;
+          if (referenced.some((r) => affectedSymbols.has(r))) {
+            affectedSymbols.add(exported);
+            grew = true;
+          }
+        }
+      }
+    }
+
+    // Only importers that bind an affected symbol count. A namespace import
+    // (`* as ns`) may use anything, so it always counts.
+    for (const edge of graph.edges) {
+      if (!targetSet.has(edge.to) || targetSet.has(edge.from)) continue;
+      const symbols = edge.symbols;
+      if (
+        !symbols ||
+        symbols.includes("*") ||
+        symbols.some((s) => affectedSymbols.has(s))
+      ) {
+        direct.add(edge.from);
+      }
+    }
+  } else {
+    for (const target of targets) {
+      for (const importer of importers.get(target) || []) {
+        if (!targetSet.has(importer)) direct.add(importer);
+      }
+    }
+  }
+
+  // Walk upstream from the direct importers.
+  const seen = new Set<string>(direct);
+  const queue = [...direct];
+  while (queue.length > 0) {
+    const current = queue.shift()!;
+    for (const importer of importers.get(current) || []) {
+      if (targetSet.has(importer) || seen.has(importer)) continue;
+      seen.add(importer);
+      queue.push(importer);
+    }
+  }
+
+  const transitive = [...seen].filter((f) => !direct.has(f)).sort();
+  return {
+    direct: [...direct].sort(),
+    transitive,
+    all: [...seen].sort(),
   };
 }
 
