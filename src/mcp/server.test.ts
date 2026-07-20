@@ -51,6 +51,17 @@ afterAll(async () => {
 });
 
 describe("repointel MCP server", () => {
+  it("reports which implementation build served the call", async () => {
+    const result = await client.callTool({
+      name: "repo_intel",
+      arguments: { root: repoRoot },
+    });
+    const payload = callResult(result);
+
+    expect(payload.server.runtime).toMatch(/bundled|reloaded/);
+    expect(payload.server.tool).toBe("repo_intel");
+  });
+
   it("exposes a single repo_intel tool", async () => {
     const { tools } = await client.listTools();
 

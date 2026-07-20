@@ -69,9 +69,12 @@ export {
 export {
   getGitCommit,
   getGitBranch,
+  getGitState,
+  getProjectIdentity,
   hashFile,
   readFileSafe,
   getFileSize,
+  ensureDir,
   writeJson,
   readJson,
   formatBytes,
@@ -80,6 +83,9 @@ export {
   matchesPattern,
   matchesPatterns,
 } from "./core/utils.js";
+
+// Commands - OODA payload (shared by `ooda --json` and the MCP server)
+export { buildOodaPayload } from "./commands/ooda.js";
 
 // Validators
 export {

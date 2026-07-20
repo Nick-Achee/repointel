@@ -25,6 +25,19 @@ claude mcp add repointel -s project -- npx -y repointel mcp
 
 The server speaks stdio and writes nothing but protocol traffic to stdout.
 
+**It picks up rebuilds without restarting.** A stdio server is long-lived, so it would
+normally serve whatever code existed when the client spawned it — stale the moment you
+rebuild. Instead the implementation is resolved per call through a dynamic import keyed on
+the build's mtime: an unchanged build hits the module cache, a new build is imported fresh.
+Every response reports which build served it:
+
+```jsonc
+"server": { "tool": "repo_intel", "runtime": "reloaded", "buildStamp": 1784590860712 }
+```
+
+`runtime: "reloaded"` means the call ran the current build. A partially-written bundle
+mid-rebuild falls back to the bundled copy rather than failing the call.
+
 ## The one tool
 
 `repo_intel` takes no required arguments. Every call:

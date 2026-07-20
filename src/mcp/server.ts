@@ -1,15 +1,7 @@
 import * as path from "node:path";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
-import { buildOodaPayload } from "../commands/ooda.js";
-import { buildDepGraph, findDependents } from "../core/dep-graph.js";
-import {
-  sliceFeature,
-  generateContextPack,
-  saveSlice,
-  saveContextPack,
-} from "../core/slicer.js";
-import { ensureDir } from "../core/utils.js";
+import { loadRuntime } from "./runtime.js";
 
 const TOOL_DESCRIPTION = `Get deterministic, always-current intelligence about this repository in one call.
 
@@ -75,21 +67,33 @@ export function createRepointelServer(): McpServer {
       const repoRoot = root || process.cwd();
 
       try {
-        const payload = await buildOodaPayload(repoRoot, {
+        // Resolve the implementation per call so a rebuilt bundle is picked
+        // up without restarting this long-lived server process.
+        const rt = await loadRuntime();
+
+        const payload = await rt.buildOodaPayload(repoRoot, {
           refresh,
           includeTests,
         });
 
+        // Freshness is observable rather than assumed: "reloaded" means this
+        // call ran the current build, not whatever existed at server spawn.
+        (payload as Record<string, unknown>).server = {
+          tool: "repo_intel",
+          runtime: rt.source,
+          buildStamp: rt.buildStamp ?? null,
+        };
+
         if (seeds && seeds.length > 0) {
           const sliceName = name || "context";
-          const slice = await sliceFeature(seeds, sliceName, { root: repoRoot });
+          const slice = await rt.sliceFeature(seeds, sliceName, { root: repoRoot });
 
           const slicesDir = path.join(repoRoot, ".repointel", "slices");
-          ensureDir(slicesDir);
+          rt.ensureDir(slicesDir);
           const jsonPath = path.join(slicesDir, `${sliceName}.json`);
           const packPath = path.join(slicesDir, `${sliceName}.md`);
-          saveSlice(slice, jsonPath);
-          saveContextPack(await generateContextPack(slice, repoRoot), packPath);
+          rt.saveSlice(slice, jsonPath);
+          rt.saveContextPack(await rt.generateContextPack(slice, repoRoot), packPath);
 
           (payload as Record<string, unknown>).slice = {
             name: sliceName,
@@ -103,8 +107,8 @@ export function createRepointelServer(): McpServer {
           };
 
           // Impact analysis: who breaks if the seeds change (reverse deps)
-          const graph = await buildDepGraph({ root: repoRoot, includeTests });
-          const impact = findDependents(graph, slice.seedFiles, { symbol });
+          const graph = await rt.buildDepGraph({ root: repoRoot, includeTests });
+          const impact = rt.findDependents(graph, slice.seedFiles, { symbol });
           (payload as Record<string, unknown>).impact = {
             of: slice.seedFiles,
             symbol: symbol ?? null,
