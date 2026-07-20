@@ -1,0 +1,41 @@
+name: CI
+
+# Only trusted inputs are interpolated below (matrix values). No github.event.*
+# data reaches any run: step, so there is no workflow-injection surface.
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # package.json declares engines.node >= 18
+        node: ["18", "20", "22"]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+          cache: npm
+
+      - run: npm ci
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      # Build precedes tests: the CLI/MCP integration suites execute
+      # dist/bin/cli.js, which does not exist on a clean checkout.
+      - name: Build
+        run: npm run build
+
+      - name: Test
+        run: npm run test:run
