@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import { Command } from "commander";
+import { createRequire } from "node:module";
 import { scanCommand } from "../commands/scan.js";
 import { graphCommand } from "../commands/graph.js";
 import { evalCommand } from "../commands/eval.js";
@@ -14,10 +15,14 @@ import { oodaCommand } from "../commands/ooda.js";
 
 const program = new Command();
 
+const pkg = createRequire(import.meta.url)("../../package.json") as {
+  version: string;
+};
+
 program
   .name("repointel")
   .description("Repo intelligence CLI - architecture graphs, context slices, and LLM-ready artifacts")
-  .version("0.1.0");
+  .version(pkg.version);
 
 // Default action: run interactive mode if no command specified
 program.action(() => {
@@ -120,6 +125,15 @@ program
 // OODA Loop - Primary Workflow
 // ============================================================================
 
+// repointel mcp - Model Context Protocol server (stdio)
+program
+  .command("mcp")
+  .description("Run as an MCP server over stdio (one repo_intel tool, auto-runs everything)")
+  .action(async () => {
+    const { startStdioServer } = await import("../mcp/stdio.js");
+    await startStdioServer();
+  });
+
 // repointel ooda - Main entry point for OODA workflow
 program
   .command("ooda")
@@ -127,6 +141,7 @@ program
   .option("-r, --refresh", "Force re-scan and re-orient")
   .option("-f, --focus <id>", "Focus on a specific feature (by number, ID, or name)")
   .option("-o, --output <dir>", "Output directory for decision context")
+  .option("-j, --json", "Machine-readable JSON output (for agents/LLMs; non-interactive)")
   .option("-y, --yes", "Non-interactive mode: auto-select recommended action")
   .option("--no-interactive", "Skip interactive prompts (same as --yes)")
   .action(oodaCommand);

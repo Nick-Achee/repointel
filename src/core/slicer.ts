@@ -20,7 +20,7 @@ import {
   matchesPatterns,
 } from "./utils.js";
 import { getIndex } from "./indexer.js";
-import { buildDepGraphFromSeeds } from "./dep-graph.js";
+import { buildDepGraphFromSeeds, expandSeeds } from "./dep-graph.js";
 
 const SLICE_VERSION = "1.0.0";
 
@@ -286,8 +286,19 @@ export async function sliceFeature(
     : null;
   const maxBytes = options.maxBytes || 8 * 1024 * 1024;
 
+  // Expand directory seeds and validate against the index
+  const index = await getIndex({ root });
+  const known = new Set(index.files.map((f) => f.relativePath));
+  const expandedSeeds = expandSeeds(seeds, index);
+  if (!expandedSeeds.some((s) => known.has(s))) {
+    throw new Error(
+      `No seed files matched the index: ${seeds.join(", ")}. ` +
+        `Run "repointel scan" or check the paths.`
+    );
+  }
+
   // Build dependency graph from seeds
-  const depGraph = await buildDepGraphFromSeeds(seeds, { root, depth });
+  const depGraph = await buildDepGraphFromSeeds(expandedSeeds, { root, depth });
 
   // Collect files
   const files: SliceFile[] = [];
@@ -295,7 +306,7 @@ export async function sliceFeature(
   let totalBytes = 0;
   let totalTokens = 0;
 
-  const seedSet = new Set(seeds);
+  const seedSet = new Set(expandedSeeds);
   const sortedNodes = [...depGraph.nodes].sort((a, b) => {
     const depthDiff = (a.depth || 0) - (b.depth || 0);
     if (depthDiff !== 0) return depthDiff;
@@ -371,7 +382,7 @@ export async function sliceFeature(
     gitCommit: getGitCommit(root),
     type: "feature",
     name,
-    seedFiles: seeds,
+    seedFiles: expandedSeeds,
     files,
     excluded,
     summary: {

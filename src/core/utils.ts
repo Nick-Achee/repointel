@@ -1,7 +1,22 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import * as crypto from "node:crypto";
-import { execSync } from "node:child_process";
+import { execSync, execFileSync } from "node:child_process";
+
+/**
+ * Run a git command without a shell (arguments are passed as an array, so no
+ * shell interpolation is possible). Returns null when git fails or is absent.
+ */
+function git(repoRoot: string, args: string[]): string | null {
+  try {
+    return execFileSync("git", args, {
+      cwd: repoRoot,
+      stdio: ["pipe", "pipe", "pipe"],
+    }).toString();
+  } catch {
+    return null;
+  }
+}
 
 /**
  * Get git commit hash for current repo
@@ -33,6 +48,98 @@ export function getGitBranch(repoRoot: string): string | undefined {
   } catch {
     return undefined;
   }
+}
+
+export interface GitState {
+  isRepo: boolean;
+  branch?: string;
+  head?: string;
+  uncommittedFiles: string[];
+  untrackedFiles: string[];
+  recentCommits: string[];
+}
+
+/**
+ * Read the working-tree state: what has actually changed, not what a spec claims.
+ */
+export function getGitState(repoRoot: string): GitState {
+  const status = git(repoRoot, ["status", "--porcelain"]);
+  if (status === null) {
+    return {
+      isRepo: false,
+      uncommittedFiles: [],
+      untrackedFiles: [],
+      recentCommits: [],
+    };
+  }
+
+  const uncommittedFiles: string[] = [];
+  const untrackedFiles: string[] = [];
+  for (const line of status.split("\n")) {
+    if (!line.trim()) continue;
+    const file = line.slice(3).trim();
+    if (line.startsWith("??")) untrackedFiles.push(file);
+    else uncommittedFiles.push(file);
+  }
+
+  const log = git(repoRoot, ["log", "--oneline", "-5"]);
+
+  return {
+    isRepo: true,
+    branch: getGitBranch(repoRoot),
+    head: getGitCommit(repoRoot)?.slice(0, 8),
+    uncommittedFiles,
+    untrackedFiles,
+    recentCommits: log ? log.split("\n").filter(Boolean) : [],
+  };
+}
+
+export interface ProjectIdentity {
+  name?: string;
+  version?: string;
+  description?: string;
+  entryPoints: string[];
+  readme?: string;
+}
+
+/**
+ * Answer "what is this project" from package.json and the README tagline.
+ */
+export function getProjectIdentity(repoRoot: string): ProjectIdentity {
+  const identity: ProjectIdentity = { entryPoints: [] };
+
+  const pkgRaw = readFileSafe(path.join(repoRoot, "package.json"));
+  if (pkgRaw) {
+    try {
+      const pkg = JSON.parse(pkgRaw);
+      identity.name = pkg.name;
+      identity.version = pkg.version;
+      identity.description = pkg.description;
+      if (typeof pkg.bin === "string") identity.entryPoints.push(pkg.bin);
+      else if (pkg.bin) identity.entryPoints.push(...Object.values<string>(pkg.bin));
+      if (pkg.main) identity.entryPoints.push(pkg.main);
+    } catch {
+      // leave identity partially filled
+    }
+  }
+
+  const readme = readFileSafe(path.join(repoRoot, "README.md"));
+  if (readme) {
+    // First blockquote (tagline), else first plain paragraph line.
+    const tagline = readme.match(/^>\s*(.+)$/m)?.[1];
+    const firstPara = readme
+      .split("\n")
+      .find(
+        (l) =>
+          l.trim() &&
+          !l.startsWith("#") &&
+          !l.startsWith(">") &&
+          !l.startsWith("[")
+      );
+    identity.readme = (tagline || firstPara || "").trim() || undefined;
+  }
+
+  return identity;
 }
 
 /**
@@ -165,16 +272,18 @@ export function extractRouteParams(routePath: string): string[] {
  * Simple glob pattern matching
  */
 export function matchesPattern(filePath: string, pattern: string): boolean {
-  const regex = new RegExp(
-    "^" +
-      pattern
-        .replace(/\*\*/g, "{{DOUBLESTAR}}")
-        .replace(/\*/g, "[^/]*")
-        .replace(/{{DOUBLESTAR}}/g, ".*")
-        .replace(/\./g, "\\.") +
-      "$"
+  // Single-pass translation: glob tokens and regex escapes are handled in one
+  // replace so injected regex text is never re-scanned by a later substitution.
+  const regexStr = pattern.replace(
+    /\*\*\/|\*\*|\*|[.+?^${}()|[\]\\]/g,
+    (token) => {
+      if (token === "**/") return "(?:.*/)?";
+      if (token === "**") return ".*";
+      if (token === "*") return "[^/]*";
+      return "\\" + token;
+    }
   );
-  return regex.test(filePath);
+  return new RegExp("^" + regexStr + "$").test(filePath);
 }
 
 /**

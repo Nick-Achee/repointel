@@ -15,7 +15,8 @@
     }
   },
   "scripts": {
-    "build": "tsup",
+    "build": "tsc --noEmit && tsup",
+    "typecheck": "tsc --noEmit",
     "dev": "tsx src/bin/cli.ts",
     "test": "vitest",
     "test:run": "vitest run",
@@ -36,7 +37,7 @@
   },
   "homepage": "https://github.com/Nick-Achee/repointel#readme",
   "engines": {
-    "node": ">=18"
+    "node": ">=20.12"
   },
   "keywords": [
     "repo-intel",
@@ -70,9 +71,11 @@
   "license": "MIT",
   "dependencies": {
     "@inquirer/prompts": "8.1.0",
+    "@modelcontextprotocol/sdk": "^1.29.0",
     "commander": "^12.1.0",
     "fast-glob": "^3.3.2",
-    "picocolors": "^1.1.1"
+    "picocolors": "^1.1.1",
+    "zod": "^4.4.3"
   },
   "devDependencies": {
     "@types/node": "^20.17.0",

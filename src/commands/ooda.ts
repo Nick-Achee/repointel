@@ -3,7 +3,7 @@ import * as path from "node:path";
 import * as fs from "node:fs";
 import { select, input, confirm } from "@inquirer/prompts";
 import { generateIndex, saveIndex, getIndex } from "../core/indexer.js";
-import { buildDepGraph } from "../core/dep-graph.js";
+import { buildDepGraph, findDependents } from "../core/dep-graph.js";
 import { buildApiGraph } from "../core/api-graph.js";
 import {
   detectSpecKit,
@@ -14,15 +14,24 @@ import {
   type SpecKitFeature,
 } from "../core/speckit.js";
 import { sliceFeature } from "../core/slicer.js";
-import { ensureDir, readFileSafe } from "../core/utils.js";
+import {
+  ensureDir,
+  readFileSafe,
+  getGitState,
+  getProjectIdentity,
+} from "../core/utils.js";
 import type { RepoIndex } from "../types/index.js";
 
 export interface OodaCommandOptions {
+  /** Repository root; defaults to the current working directory */
+  root?: string;
   refresh?: boolean;
   output?: string;
   focus?: string;
   yes?: boolean;
   interactive?: boolean;
+  json?: boolean;
+  includeTests?: boolean;
 }
 
 interface Constitution {
@@ -52,7 +61,11 @@ interface OodaState {
  * context for the D (Decide) phase, which is handled by your LLM of choice.
  */
 export async function oodaCommand(options: OodaCommandOptions): Promise<void> {
-  const root = process.cwd();
+  const root = options.root || process.cwd();
+
+  if (options.json) {
+    return oodaJsonCommand(root, options);
+  }
 
   console.log(pc.cyan("\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"));
   console.log(pc.bold("  🔄 OODA Loop - Observe → Orient → Decide → Act"));
@@ -84,7 +97,7 @@ export async function oodaCommand(options: OodaCommandOptions): Promise<void> {
   if (!fs.existsSync(depsPath) || options.refresh) {
     console.log(pc.dim("     Building dependency graph..."));
     ensureDir(graphsDir);
-    const depGraph = await buildDepGraph(root);
+    const depGraph = await buildDepGraph({ root });
     fs.writeFileSync(depsPath, JSON.stringify(depGraph, null, 2));
     console.log(pc.green(`     ✓ ${depGraph.nodes.length} nodes, ${depGraph.edges.length} edges`));
   } else {
@@ -203,7 +216,9 @@ function generateActions(state: OodaState): Action[] {
 
   // Priority 1: Fix anti-patterns (aligns with quality principles)
   if (index) {
-    const antiPatternCount = Object.values(index.summary.totalAntiPatterns).reduce((a, b) => a + b, 0);
+    const antiPatternCount = Object.values(
+      index.summary.totalAntiPatterns ?? {}
+    ).reduce((a: number, b: number) => a + b, 0);
     if (antiPatternCount > 0) {
       actions.push({
         title: `Fix ${antiPatternCount} anti-pattern(s)`,
@@ -217,7 +232,7 @@ function generateActions(state: OodaState): Action[] {
 
   // Priority 2: Current feature tasks
   if (currentFeature) {
-    const inProgress = currentFeature.tasks?.filter(t => t.status === "in_progress") || [];
+    const inProgress = currentFeature.tasks?.filter(t => t.status === "in-progress") || [];
     const pending = currentFeature.tasks?.filter(t => t.status === "pending") || [];
 
     if (inProgress.length > 0) {
@@ -225,7 +240,7 @@ function generateActions(state: OodaState): Action[] {
       actions.push({
         title: `Continue: "${task.title}"`,
         description: `In-progress task for ${currentFeature.name}`,
-        command: `repointel slice --seeds ${currentFeature.spec?.entryPoints?.[0] || "src/"} --name ${currentFeature.id}`,
+        command: `repointel slice --seeds ${featureSeedHint(state.root, currentFeature)} --name ${currentFeature.id}`,
         why: "Complete in-progress work before starting new tasks",
         type: "task",
       });
@@ -234,7 +249,7 @@ function generateActions(state: OodaState): Action[] {
       actions.push({
         title: `Start: "${task.title}"`,
         description: `Next pending task for ${currentFeature.name}`,
-        command: `repointel slice --seeds ${currentFeature.spec?.entryPoints?.[0] || "src/"} --name ${currentFeature.id}`,
+        command: `repointel slice --seeds ${featureSeedHint(state.root, currentFeature)} --name ${currentFeature.id}`,
         why: "Focused context helps complete tasks faster",
         type: "task",
       });
@@ -295,6 +310,170 @@ function generateActions(state: OodaState): Action[] {
   return actions.slice(0, 5); // Max 5 options
 }
 
+/**
+ * Best available seed for a feature's slice command: the seeds of an existing
+ * slice for that feature, else the src/ directory (directory seeds expand).
+ */
+function featureSeedHint(root: string, feature: SpecKitFeature): string {
+  const slicePath = path.join(root, ".repointel", "slices", `${feature.id}.json`);
+  try {
+    const slice = JSON.parse(fs.readFileSync(slicePath, "utf-8"));
+    if (Array.isArray(slice.seedFiles) && slice.seedFiles.length > 0) {
+      return slice.seedFiles[0];
+    }
+  } catch {
+    // fall through to default
+  }
+  return "src/";
+}
+
+function summarizeTasks(feature: SpecKitFeature) {
+  const tasks = feature.tasks ?? [];
+  const byStatus = (s: string) => tasks.filter((t) => t.status === s);
+  return {
+    total: tasks.length,
+    completed: byStatus("completed").length,
+    inProgress: byStatus("in-progress").length,
+    pending: byStatus("pending").length,
+    inProgressTitles: byStatus("in-progress").map((t) => t.title),
+    nextPending: byStatus("pending")[0]?.title ?? null,
+  };
+}
+
+/**
+ * Machine-readable OODA: observe (fresh index) + orient (speckit, dep graph)
+ * + decide (ranked actions) as one structured payload.
+ * Read-only: never scaffolds .specify/. Shared by `ooda --json` and the MCP server.
+ */
+export async function buildOodaPayload(
+  root: string,
+  options: OodaCommandOptions
+): Promise<Record<string, unknown>> {
+  // OBSERVE — getIndex is staleness-aware, so this is always current
+  const index = await getIndex({
+    root,
+    refresh: options.refresh,
+    includeTests: options.includeTests,
+  });
+  saveIndex(index, path.join(root, ".repointel"));
+
+  // ORIENT — read-only
+  const graphsDir = path.join(root, ".repointel", "graphs");
+  ensureDir(graphsDir);
+  const depGraph = await buildDepGraph({ root });
+  fs.writeFileSync(
+    path.join(graphsDir, "deps.json"),
+    JSON.stringify(depGraph, null, 2)
+  );
+
+  const state = await gatherState(root, options);
+  state.index = index;
+
+  const git = getGitState(root);
+  const project = getProjectIdentity(root);
+
+  // DECIDE — working-tree reality outranks spec state: uncommitted work is
+  // what is actually in flight, regardless of what tasks.md claims.
+  const actions = generateActions(state);
+  // Blast radius: what the uncommitted source changes actually reach.
+  const indexedFiles = new Set(index.files.map((f) => f.relativePath));
+  const changedSourceFiles = [...git.uncommittedFiles, ...git.untrackedFiles]
+    .filter((f) => indexedFiles.has(f))
+    .sort();
+  const impact =
+    changedSourceFiles.length > 0
+      ? findDependents(depGraph, changedSourceFiles)
+      : { direct: [], transitive: [], all: [], details: [] };
+  const blastRadius = {
+    changedSourceFiles,
+    affected: impact.all,
+    direct: impact.direct,
+    transitive: impact.transitive,
+    details: impact.details.slice(0, 20),
+  };
+
+  if (blastRadius.affected.length > 0) {
+    actions.unshift({
+      title: `Verify ${blastRadius.affected.length} file(s) downstream of your changes`,
+      description: `${changedSourceFiles.length} changed source file(s) are imported by ${blastRadius.direct.length} file(s) directly and ${blastRadius.transitive.length} transitively.`,
+      command: "npm run typecheck && npm run test:run",
+      why: "These files consume what you changed — they are where a regression would surface",
+      type: "fix",
+    });
+  }
+
+  const changedCount = git.uncommittedFiles.length + git.untrackedFiles.length;
+  if (changedCount > 0) {
+    const sample = [...git.uncommittedFiles, ...git.untrackedFiles].slice(0, 5);
+    actions.unshift({
+      title: `Finish uncommitted work (${changedCount} changed file${changedCount === 1 ? "" : "s"})`,
+      description: `Working tree has in-flight changes on ${git.branch || "HEAD"}: ${sample.join(", ")}${changedCount > sample.length ? ", …" : ""}`,
+      command: "git status --short",
+      why: "Uncommitted changes are the real current state — finish or commit them before starting new work",
+      type: "fix",
+    });
+  }
+
+  const decisionContext = await generateDecisionContext(state, options);
+  const promptsDir = path.join(root, ".repointel", "prompts");
+  ensureDir(promptsDir);
+  const contextPath = path.join(promptsDir, "DECISION_CONTEXT.md");
+  fs.writeFileSync(contextPath, decisionContext);
+
+  const payload = {
+    root,
+    project,
+    git,
+    observe: {
+      files: index.summary.totalFiles,
+      totalSizeBytes: index.summary.totalSizeBytes,
+      frameworks: index.frameworks,
+      byType: index.summary.byType,
+      excludedFromIndex: index.excludedFromIndex,
+      // Which of the fields above are counted vs guessed.
+      provenance: index.provenance,
+    },
+    orient: {
+      features: (state.speckit?.features ?? []).map((f) => ({
+        id: f.id,
+        number: f.number,
+        name: f.name,
+        tasks: summarizeTasks(f),
+      })),
+      currentFeature: state.currentFeature
+        ? {
+            id: state.currentFeature.id,
+            number: state.currentFeature.number,
+            name: state.currentFeature.name,
+            tasks: summarizeTasks(state.currentFeature),
+          }
+        : null,
+      graph: {
+        nodes: depGraph.nodes.length,
+        edges: depGraph.edges.length,
+        circular: depGraph.cycles.length,
+        externalDeps: depGraph.stats.externalDeps,
+      },
+    },
+    decide: { actions, blastRadius },
+    artifacts: {
+      index: ".repointel/index.json",
+      depGraph: ".repointel/graphs/deps.json",
+      decisionContext: ".repointel/prompts/DECISION_CONTEXT.md",
+    },
+  };
+
+  return payload;
+}
+
+async function oodaJsonCommand(
+  root: string,
+  options: OodaCommandOptions
+): Promise<void> {
+  const payload = await buildOodaPayload(root, options);
+  console.log(JSON.stringify(payload, null, 2));
+}
+
 async function gatherState(root: string, options: OodaCommandOptions): Promise<OodaState> {
   const indexPath = path.join(root, ".repointel", "index.json");
   const hasIndex = fs.existsSync(indexPath);
@@ -302,7 +481,7 @@ async function gatherState(root: string, options: OodaCommandOptions): Promise<O
   let index: RepoIndex | null = null;
   if (hasIndex) {
     try {
-      index = await getIndex(root);
+      index = await getIndex({ root });
     } catch {
       // Will need to re-observe
     }
@@ -321,13 +500,17 @@ async function gatherState(root: string, options: OodaCommandOptions): Promise<O
   // Find current/focused feature
   let currentFeature: SpecKitFeature | null = null;
   if (speckit && options.focus) {
-    currentFeature = findFeature(speckit, options.focus);
+    currentFeature = findFeature(speckit, options.focus) ?? null;
   } else if (speckit && speckit.features.length > 0) {
-    // Auto-detect: find in-progress feature
-    currentFeature = speckit.features.find(f => {
-      const inProgress = f.tasks?.filter(t => t.status === "in_progress") || [];
-      return inProgress.length > 0;
-    }) || speckit.features[speckit.features.length - 1];
+    // Evidence order: work marked in-progress, then work still unfinished,
+    // then (last resort) the newest feature directory.
+    const hasStatus = (f: SpecKitFeature, status: string) =>
+      (f.tasks || []).some((t) => t.status === status);
+
+    currentFeature =
+      speckit.features.find((f) => hasStatus(f, "in-progress")) ||
+      speckit.features.find((f) => hasStatus(f, "pending")) ||
+      speckit.features[speckit.features.length - 1];
   }
 
   return {
@@ -468,14 +651,19 @@ ${Object.entries(index.summary.byType)
   .map(([type, count]) => `- ${type}: ${count}`)
   .join("\n")}
 
-### Code Quality
+${
+  index.summary.clientComponents !== undefined
+    ? `### Code Quality
 - Client components: ${index.summary.clientComponents}
 - Server components: ${index.summary.serverComponents}
-`;
+`
+    : ""
+}`;
 
     // Anti-patterns
-    const antiPatterns = Object.entries(index.summary.totalAntiPatterns)
-      .filter(([, count]) => count > 0);
+    const antiPatterns = Object.entries(
+      index.summary.totalAntiPatterns ?? {}
+    ).filter(([, count]) => (count as number) > 0);
     if (antiPatterns.length > 0) {
       context += `
 ### ⚠️ Anti-Patterns Detected
@@ -494,7 +682,7 @@ ${antiPatterns.map(([pattern, count]) => `- ${pattern}: ${count}`).join("\n")}
 
     // In-progress work
     const inProgressFeatures = speckit.features.filter(f => {
-      const inProgress = f.tasks?.filter(t => t.status === "in_progress") || [];
+      const inProgress = f.tasks?.filter(t => t.status === "in-progress") || [];
       return inProgress.length > 0;
     });
 
@@ -502,7 +690,7 @@ ${antiPatterns.map(([pattern, count]) => `- ${pattern}: ${count}`).join("\n")}
       context += `
 ### 🔄 Currently In Progress
 ${inProgressFeatures.map(f => {
-  const inProgress = f.tasks?.filter(t => t.status === "in_progress") || [];
+  const inProgress = f.tasks?.filter(t => t.status === "in-progress") || [];
   return `- **${f.id}**: ${f.name}
   - Active tasks: ${inProgress.map(t => t.title).join(", ")}`;
 }).join("\n")}
@@ -563,7 +751,7 @@ ${currentFeature.plan.title ? `**Title:** ${currentFeature.plan.title}` : ""}
     // Tasks
     if (currentFeature.tasks && currentFeature.tasks.length > 0) {
       const completed = currentFeature.tasks.filter(t => t.status === "completed");
-      const inProgress = currentFeature.tasks.filter(t => t.status === "in_progress");
+      const inProgress = currentFeature.tasks.filter(t => t.status === "in-progress");
       const pending = currentFeature.tasks.filter(t => t.status === "pending");
 
       context += `
@@ -677,7 +865,9 @@ function printStateSummary(state: OodaState): void {
     console.log(`  ${pc.dim("Files:")}        ${index.summary.totalFiles}`);
     console.log(`  ${pc.dim("Frameworks:")}   ${index.frameworks.map(f => f.name).join(", ") || "None"}`);
 
-    const antiPatterns = Object.values(index.summary.totalAntiPatterns).reduce((a, b) => a + b, 0);
+    const antiPatterns = Object.values(
+      index.summary.totalAntiPatterns ?? {}
+    ).reduce((a: number, b: number) => a + b, 0);
     if (antiPatterns > 0) {
       console.log(`  ${pc.dim("Anti-patterns:")} ${pc.yellow(String(antiPatterns))}`);
     }
