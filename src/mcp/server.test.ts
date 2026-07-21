@@ -208,4 +208,25 @@ describe("repointel MCP server", () => {
     expect(payload.guard).toHaveProperty("ok");
     expect(payload.guard).toHaveProperty("coverage");
   });
+
+  it("returns a feature plan when planGoal is given with seeds", async () => {
+    const result = await client.callTool({
+      name: "repo_intel",
+      arguments: { root: repoRoot, planGoal: "add sessions", seeds: ["src/auth/"] },
+    });
+    const payload = callResult(result);
+    expect(payload.plan).toBeDefined();
+    expect(payload.plan.goal).toBe("add sessions");
+    expect(payload.plan.observe.seedFiles).toContain("src/auth/login.ts");
+    expect(payload.plan.decide.guard).toHaveProperty("ok");
+  });
+
+  it("hints when planGoal is given without seeds instead of silently omitting", async () => {
+    const result = await client.callTool({
+      name: "repo_intel",
+      arguments: { root: repoRoot, planGoal: "add sessions" },
+    });
+    const payload = callResult(result);
+    expect(payload.plan.error).toMatch(/seed/i);
+  });
 });

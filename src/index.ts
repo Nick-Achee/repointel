@@ -71,6 +71,28 @@ export {
   type PackageRef,
 } from "./core/symbol-id.js";
 
+// Core - OODA architecture engine (Understand / Teach / Guard / Guide)
+export { inferBoundaries, type Boundary } from "./core/understand.js";
+export {
+  resolveLabels,
+  compileRule,
+  derivePolicy,
+  type ArchitecturePolicy,
+  type PolicyLabel,
+  type PolicyRule,
+} from "./core/policy.js";
+export {
+  evaluateGuard,
+  type GuardReport,
+  type GuardViolation,
+} from "./core/guard.js";
+export {
+  buildPlan,
+  renderPlan,
+  type FeaturePlan,
+  type PlanOptions,
+} from "./core/plan.js";
+
 // Core - Route Graph
 export {
   buildRouteGraph,
