@@ -15,6 +15,8 @@ import { oodaCommand } from "../commands/ooda.js";
 import { teachInit } from "../commands/teach.js";
 import { guardCheck } from "../commands/guard.js";
 import { planCommand } from "../commands/plan.js";
+import { driftCommand } from "../commands/drift.js";
+import { reorientCommand } from "../commands/reorient.js";
 
 const program = new Command();
 
@@ -222,6 +224,26 @@ program
   .option("-j, --json", "Machine-readable structured plan")
   .action(async (goal: string, opts: { seeds: string[]; json?: boolean }) => {
     await planCommand({ goal, seeds: opts.seeds, json: opts.json });
+  });
+
+// repointel drift - what changed in the graph since a git ref
+program
+  .command("drift")
+  .description("What changed in the graph since a git ref (Guide layer)")
+  .requiredOption("--since <ref>", "Git ref to compare against (e.g. HEAD, a branch, a SHA)")
+  .option("-j, --json", "Machine-readable drift report")
+  .action(async (opts: { since: string; json?: boolean }) => {
+    await driftCommand({ since: opts.since, json: opts.json });
+  });
+
+// repointel reorient - graph-grounded reorientation for a missed constraint
+program
+  .command("reorient")
+  .description("Graph-grounded reorientation for a missed constraint (Guide layer)")
+  .argument("<trigger>", "What broke or was missed")
+  .requiredOption("-s, --seeds <paths...>", "Files/area involved")
+  .action(async (trigger: string, opts: { seeds: string[] }) => {
+    await reorientCommand({ trigger, seeds: opts.seeds });
   });
 
 // repointel ooda - Main entry point for OODA workflow

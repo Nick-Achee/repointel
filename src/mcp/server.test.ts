@@ -229,4 +229,24 @@ describe("repointel MCP server", () => {
     const payload = callResult(result);
     expect(payload.plan.error).toMatch(/seed/i);
   });
+
+  it("returns a drift report when driftSince is given", async () => {
+    const result = await client.callTool({
+      name: "repo_intel",
+      arguments: { root: repoRoot, driftSince: "HEAD" },
+    });
+    const payload = callResult(result);
+    expect(payload.drift).toBeDefined();
+    expect(payload.drift).toHaveProperty("diff");
+  });
+
+  it("returns a reorientation when reorientTrigger is given with seeds", async () => {
+    const result = await client.callTool({
+      name: "repo_intel",
+      arguments: { root: repoRoot, reorientTrigger: "login broke", seeds: ["src/auth/"] },
+    });
+    const payload = callResult(result);
+    expect(payload.reorient).toBeDefined();
+    expect(payload.reorient.trigger).toBe("login broke");
+  });
 });

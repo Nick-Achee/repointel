@@ -1,5 +1,38 @@
 # Changelog
 
+## 0.8.0
+
+Completes the Guide layer — and the OODA architecture engine — with the two remaining SOP
+protocols. Both are composers that keep structural facts `measured` and route judgment to
+questions.
+
+### Added
+
+- **`repointel drift --since <ref>`** — what changed in the graph since a git ref. Gets the
+  graph at the past ref **non-invasively** (`git archive` → temp dir, working tree never
+  touched), snapshots current vs ref, and reports added/removed files, edges, and exports
+  plus new cross-boundary edges (architecture-drift signal) and new cycles; intent and
+  category as questions. `--json`, and `driftSince` on the `repo_intel` MCP tool.
+- **`repointel reorient "<trigger>" --seeds <area>`** — a graph-grounded Reorientation Plan
+  for a missed constraint: current guard fitness + the impact of the affected area
+  (measured), with the SOP drift classification and smallest-safe-correction as questions.
+  `reorientTrigger` on the MCP tool.
+- `buildDrift`/`renderDrift`/`buildReorientation`/`renderReorientation` exported from the
+  package root.
+
+### Safety
+
+- Drift is **non-invasive** (temp-dir extraction, cleaned up in `finally`) and
+  **injection-safe** (`git`/`tar` via `execFileSync` with argument arrays, no shell — a
+  hostile ref cannot inject; it simply fails to resolve to an error result). Both proven by
+  adversarial review.
+
+### Notes
+
+- The OODA engine is now complete: all four layers (Teach / Understand / Guard / Guide) and
+  all four SOP protocols (`plan`, `drift`, `reorient`, plus the contract wedge). No
+  index-format change.
+
 ## 0.7.0
 
 The **Guide** layer — completes the OODA architecture engine. `repointel plan` turns the

@@ -6,6 +6,8 @@ import { z } from "zod";
 import { loadRuntime } from "./runtime.js";
 import { evaluateGuard } from "../core/guard.js";
 import { buildPlan } from "../core/plan.js";
+import { buildDrift } from "../core/drift.js";
+import { buildReorientation } from "../core/reorient.js";
 import type { ArchitecturePolicy } from "../core/policy.js";
 import { readJson } from "../core/utils.js";
 
@@ -99,9 +101,17 @@ export function createRepointelServer(): McpServer {
               "export-exists, edge-exists, edge-forbidden). Returns a convergent/" +
               "absent/divergent audit — deterministic verification of intent."
           ),
+        driftSince: z
+          .string()
+          .optional()
+          .describe("Report what changed in the graph since this git ref (Guide layer)."),
+        reorientTrigger: z
+          .string()
+          .optional()
+          .describe("Compose a graph-grounded Reorientation Plan for a missed constraint. Requires seeds."),
       },
     },
-    async ({ root, seeds, name, refresh, includeTests, symbol, contract, guard, planGoal }) => {
+    async ({ root, seeds, name, refresh, includeTests, symbol, contract, guard, planGoal, driftSince, reorientTrigger }) => {
       const repoRoot = root || process.cwd();
 
       try {
@@ -210,6 +220,20 @@ export function createRepointelServer(): McpServer {
                 "planGoal requires seeds (the files or directories the change touches).",
             };
           }
+        }
+
+        if (driftSince) {
+          (payload as Record<string, unknown>).drift = await buildDrift(driftSince, {
+            root: repoRoot,
+          });
+        }
+
+        if (reorientTrigger && seeds && seeds.length > 0) {
+          (payload as Record<string, unknown>).reorient = await buildReorientation(
+            reorientTrigger,
+            seeds,
+            { root: repoRoot }
+          );
         }
 
         return {
