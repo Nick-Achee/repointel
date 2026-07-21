@@ -163,3 +163,39 @@ describe("evaluateContract robustness", () => {
     expect(result.results[0].classification).toBe("absent");
   });
 });
+
+describe("path-forbidden expectation", () => {
+  it("is divergent when the target is reachable transitively, convergent when not", async () => {
+    const r = fs.mkdtempSync(path.join(os.tmpdir(), "repointel-pf-"));
+    try {
+      const w = (rel: string, c: string) => {
+        const abs = path.join(r, rel);
+        fs.mkdirSync(path.dirname(abs), { recursive: true });
+        fs.writeFileSync(abs, c);
+      };
+      w("package.json", JSON.stringify({ name: "p", version: "1" }));
+      // ui -> service -> db  (ui reaches db only transitively)
+      w("src/ui/page.ts", 'import { s } from "../service/s";\nexport const p = s;');
+      w("src/service/s.ts", 'import { d } from "../db/d";\nexport const s = d;');
+      w("src/db/d.ts", "export const d = 1;");
+      w("src/lonely/x.ts", "export const x = 1;");
+
+      const index = await generateIndex({ root: r });
+      const graph = await buildDepGraph({ root: r });
+
+      const forbidden = evaluateContract(
+        { name: "t", expect: [{ kind: "path-forbidden", from: "src/ui/**", to: "src/db/**" }] },
+        index, graph
+      );
+      expect(forbidden.results[0].classification).toBe("divergent");
+
+      const allowed = evaluateContract(
+        { name: "t", expect: [{ kind: "path-forbidden", from: "src/lonely/**", to: "src/db/**" }] },
+        index, graph
+      );
+      expect(allowed.results[0].classification).toBe("convergent");
+    } finally {
+      fs.rmSync(r, { recursive: true, force: true });
+    }
+  });
+});
