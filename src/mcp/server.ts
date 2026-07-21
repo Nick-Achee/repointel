@@ -1,4 +1,5 @@
 import * as path from "node:path";
+import * as fs from "node:fs";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { loadRuntime } from "./runtime.js";
@@ -61,9 +62,17 @@ export function createRepointelServer(): McpServer {
             "Narrow impact analysis to one exported name, e.g. 'matchesPattern'. " +
               "Only files that actually import that binding count as directly affected."
           ),
+        contract: z
+          .string()
+          .optional()
+          .describe(
+            "Path to a contract JSON of expected graph deltas (file-exists, " +
+              "export-exists, edge-exists, edge-forbidden). Returns a convergent/" +
+              "absent/divergent audit — deterministic verification of intent."
+          ),
       },
     },
-    async ({ root, seeds, name, refresh, includeTests, symbol }) => {
+    async ({ root, seeds, name, refresh, includeTests, symbol, contract }) => {
       const repoRoot = root || process.cwd();
 
       try {
@@ -75,6 +84,22 @@ export function createRepointelServer(): McpServer {
           refresh,
           includeTests,
         });
+
+        // Contract audit: deterministic verification of expected graph deltas.
+        if (contract) {
+          const contractPath = path.isAbsolute(contract)
+            ? contract
+            : path.join(repoRoot, contract);
+          const raw = fs.readFileSync(contractPath, "utf-8");
+          const parsed = JSON.parse(raw);
+          const index = await rt.generateIndex({ root: repoRoot, includeTests });
+          const graph = await rt.buildDepGraph({ root: repoRoot, includeTests });
+          (payload as Record<string, unknown>).contract = rt.evaluateContract(
+            parsed,
+            index,
+            graph
+          );
+        }
 
         // Freshness is observable rather than assumed: "reloaded" means this
         // call ran the current build, not whatever existed at server spawn.

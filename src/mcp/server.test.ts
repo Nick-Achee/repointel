@@ -153,6 +153,31 @@ describe("repointel MCP server", () => {
     expect(detail.line).toBeGreaterThan(0);
   });
 
+  it("evaluates a contract of expected graph deltas when given one", async () => {
+    const contractPath = path.join(repoRoot, "reset.contract.json");
+    fs.writeFileSync(
+      contractPath,
+      JSON.stringify({
+        name: "auth",
+        expect: [
+          { kind: "file-exists", path: "src/auth/login.ts" },
+          { kind: "file-exists", path: "src/auth/nonexistent.ts" },
+          { kind: "edge-exists", from: "src/auth/login.ts", to: "src/db.ts" },
+        ],
+      })
+    );
+
+    const result = await client.callTool({
+      name: "repo_intel",
+      arguments: { root: repoRoot, contract: contractPath },
+    });
+    const payload = callResult(result);
+
+    expect(payload.contract.ok).toBe(false);
+    expect(payload.contract.summary.satisfied).toBe(2);
+    expect(payload.contract.summary.absent).toBe(1);
+  });
+
   it("reports an unusable seed as an error result instead of throwing", async () => {
     const result: any = await client.callTool({
       name: "repo_intel",

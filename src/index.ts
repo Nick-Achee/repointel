@@ -42,6 +42,19 @@ export {
   depGraphToMermaid,
 } from "./core/dep-graph.js";
 
+// Core - Intent-as-contract (the wedge)
+export {
+  evaluateContract,
+  snapshotGraph,
+  diffSnapshots,
+  deriveContractFromDiff,
+  type Contract,
+  type Expectation,
+  type ContractResult,
+  type GraphSnapshot,
+  type SnapshotDiff,
+} from "./core/contract.js";
+
 // Core - Relevance ranking
 export {
   personalizedPageRank,
