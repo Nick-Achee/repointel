@@ -187,4 +187,25 @@ describe("repointel MCP server", () => {
     expect(result.isError).toBe(true);
     expect(result.content[0].text).toMatch(/seed/i);
   });
+
+  it("returns a guard report when guard:true and a policy exists", async () => {
+    fs.mkdirSync(path.join(repoRoot, ".repointel"), { recursive: true });
+    fs.writeFileSync(
+      path.join(repoRoot, ".repointel", "architecture.json"),
+      JSON.stringify({
+        version: "1.0.0",
+        labels: [{ label: "all", include: ["src/**"], provenance: "inferred" }],
+        forbidden: [],
+        entrypoints: [],
+      })
+    );
+    const result = await client.callTool({
+      name: "repo_intel",
+      arguments: { root: repoRoot, guard: true },
+    });
+    const payload = callResult(result);
+    expect(payload.guard).toBeDefined();
+    expect(payload.guard).toHaveProperty("ok");
+    expect(payload.guard).toHaveProperty("coverage");
+  });
 });
