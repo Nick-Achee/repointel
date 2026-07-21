@@ -1,5 +1,41 @@
 # Changelog
 
+## 0.6.0
+
+The architecture-fitness spine — the first layer of the OODA architecture engine. Extends
+the contract wedge from "does edge X exist" to "does this codebase obey its architecture,"
+with rules **derived and ratified** from the current graph rather than hand-authored.
+
+### Added
+
+- **`repointel teach init`** — derives an `ArchitecturePolicy` from the current graph:
+  directory labels plus the forbidden-edge rules the code **already satisfies**, all
+  `inferred` and unratified. You confirm observed invariants instead of authoring a blank
+  policy. Written to `.repointel/architecture.json`.
+- **`repointel guard check`** — the architecture fitness function. Evaluates the policy into
+  a two-channel report: deterministic **violations** vs heuristic **smells** (god-file by
+  degree), plus **coverage** (unlabeled files). Exits non-zero on an error-level violation,
+  `--json` for CI/hooks.
+- **`guard: true`** on the `repo_intel` MCP tool — returns the fitness report inline.
+- **Two new contract expectation kinds**: `path-forbidden` (transitive isolation via the
+  reachability closure) and `orphan-forbidden`.
+- **Understand** (`inferBoundaries`): directory boundaries with Martin instability
+  `I = Ce/(Ca+Ce)` and the exact cross-boundary edge list (measured).
+
+### Integrity
+
+- **Severity is capped by provenance**, structurally: a machine-`inferred` label can never
+  produce an `error`. Reaching CI-failing severity requires a human to declare **both**
+  endpoint labels *and* ratify the rule. `derivePolicy` only ever emits `inferred` /
+  `ratified:false`. Verified end-to-end by adversarial review.
+
+### Notes
+
+- Deferred to a later release (named in the design spec): baseline-drift accept/reject,
+  method-level CQS, community-detection boundaries, and the `plan`/`drift`/`reorient`
+  protocols (the Guide layer). This release is the deterministic floor.
+- No index-format change (`INDEX_VERSION` stays 1.4.0); existing caches are unaffected.
+
 ## 0.5.0
 
 The loop-with-graph thesis, functional end to end: a deterministic, ambiently-fresh code
