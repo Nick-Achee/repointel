@@ -99,11 +99,48 @@ export async function buildDrift(
       crossBoundaryEdges,
       newCycles,
       questions: [
-        "Is this drift INTENDED, or did something change that shouldn't have? The graph shows what moved, not whether it should have.",
-        "Which drift CATEGORY is this (contract / architecture / data-model / permission / behavior)? Removed exports and new cross-boundary edges are the usual culprits.",
+        "The graph shows what moved, not whether it should have — is this drift INTENDED, or did something change that shouldn't have?",
+        "Removed exports and new cross-boundary edges are the usual culprits — which drift CATEGORY is this (contract / architecture / data-model / permission / behavior)?",
       ],
     };
   } finally {
     fs.rmSync(refDir, { recursive: true, force: true });
   }
+}
+
+/** Render a DriftReport as Markdown. */
+export function renderDrift(drift: DriftReport): string {
+  const lines: string[] = [];
+  lines.push(`# Drift since ${drift.sinceRef}`, "");
+  if (drift.error) {
+    lines.push(`> ${drift.error}`);
+    return lines.join("\n");
+  }
+
+  const d = drift.diff;
+  lines.push(`## Structural changes (${drift.provenance})`, "");
+  const section = (title: string, items: string[]) => {
+    lines.push(`**${title} (${items.length})**`);
+    for (const i of items.slice(0, 15)) lines.push(`- ${i}`);
+    if (items.length > 15) lines.push(`- …and ${items.length - 15} more`);
+    lines.push("");
+  };
+  section("Added files", d.addedFiles);
+  section("Removed files", d.removedFiles);
+  section("Added edges", d.addedEdges);
+  section("Removed edges", d.removedEdges);
+  section("Added exports", d.addedExports);
+  section("Removed exports", d.removedExports);
+
+  if (drift.crossBoundaryEdges.length > 0) {
+    lines.push(`**⚠ New cross-boundary edges (${drift.crossBoundaryEdges.length}) — possible architecture drift**`);
+    for (const e of drift.crossBoundaryEdges.slice(0, 10)) lines.push(`- ${e}`);
+    lines.push("");
+  }
+  if (drift.newCycles > 0) lines.push(`**⚠ ${drift.newCycles} new dependency cycle(s)**`, "");
+
+  lines.push("## Questions (judgment — the graph cannot answer these)", "");
+  for (const q of drift.questions) lines.push(`- ${q}`);
+
+  return lines.join("\n");
 }
