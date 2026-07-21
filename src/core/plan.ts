@@ -115,3 +115,61 @@ export async function buildPlan(
     },
   };
 }
+
+/** Render a FeaturePlan as a Markdown document (the SOP shape, graph-grounded). */
+export function renderPlan(plan: FeaturePlan): string {
+  const lines: string[] = [];
+  lines.push(`# Feature Plan: ${plan.goal}`, "");
+  lines.push(
+    "> Deterministic sections are filled from the graph (provenance noted).",
+    "> Questions are judgment the graph cannot answer — you fill them.",
+    ""
+  );
+
+  // 1. Observe
+  lines.push(`## 1. Observe (${plan.provenance.observe})`, "");
+  lines.push(`Seed area: ${plan.observe.seedFiles.join(", ")}`);
+  lines.push(`Context pack: ${plan.observe.contextPack} (~${plan.observe.estimatedTokens} tokens)`, "");
+  lines.push("Most relevant files (PageRank-ranked):");
+  for (const f of plan.observe.files.slice(0, 12)) {
+    const r = f.rank !== undefined ? ` (rank ${f.rank.toFixed(3)})` : "";
+    lines.push(`- ${f.relativePath}${r} — ${f.reason}`);
+  }
+  lines.push("");
+
+  // 2. Orient
+  lines.push(`## 2. Orient (${plan.provenance.orient})`, "");
+  lines.push("Boundaries (directory-inferred, with instability I = Ce/(Ca+Ce)):");
+  for (const b of plan.orient.boundaries) {
+    lines.push(`- **${b.label}** — I=${b.instability.toFixed(2)}, ${b.crossEdges.length} cross-edge(s)`);
+  }
+  lines.push("", "Questions (judgment — the graph cannot answer these):");
+  for (const q of plan.orient.questions) lines.push(`- ${q}`);
+  lines.push("");
+
+  // 3. Decide
+  lines.push(`## 3. Decide (${plan.provenance.decide})`, "");
+  const g = plan.decide.guard;
+  lines.push(`Architecture fitness: ${g.ok ? "no error-level violations" : "ERROR-level violations present"}`);
+  const divergent = g.violations.filter((v) => v.classification === "divergent");
+  for (const v of divergent) lines.push(`- ${v.severity === "error" ? "✗" : "⚠"} ${v.rule} (${v.provenance})`);
+  for (const s of g.smells.slice(0, 5)) lines.push(`- ⚠ smell: ${s.detail}`);
+  lines.push(
+    "",
+    `Impact of the seed area: ${plan.decide.impact.affected.length} file(s) affected ` +
+      `(${plan.decide.impact.direct.length} direct, ${plan.decide.impact.transitive.length} transitive).`,
+    ""
+  );
+  lines.push("Questions (judgment):");
+  for (const q of plan.decide.questions) lines.push(`- ${q}`);
+  lines.push("");
+
+  // 4. Act
+  lines.push("## 4. Act", "");
+  lines.push(plan.act.note, "");
+  lines.push("```json");
+  lines.push(JSON.stringify(plan.act.contractTemplate, null, 2));
+  lines.push("```");
+
+  return lines.join("\n");
+}

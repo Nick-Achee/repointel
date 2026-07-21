@@ -3,6 +3,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { buildPlan } from "./plan.js";
+import { renderPlan } from "./plan.js";
 
 let root: string;
 
@@ -64,5 +65,22 @@ describe("buildPlan", () => {
       ...plan.decide.questions,
     ].join(" ");
     expect(allQuestions).toMatch(/primitive|pattern|invariant/i);
+  });
+});
+
+describe("renderPlan", () => {
+  it("renders the SOP sections with evidence and questions, marking provenance", async () => {
+    const plan = await buildPlan("add password reset", ["src/auth/"], { root });
+    const md = renderPlan(plan);
+
+    expect(md).toMatch(/# Feature Plan/);
+    expect(md).toMatch(/## 1\. Observe/);
+    expect(md).toMatch(/## 2\. Orient/);
+    expect(md).toMatch(/## 3\. Decide/);
+    expect(md).toMatch(/## 4\. Act/);
+    expect(md).toContain("src/auth/login.ts");
+    expect(md).toMatch(/\?\s*$/m);
+    expect(md).toMatch(/measured|inferred/);
+    expect(md).toMatch(/```json[\s\S]*file-exists/);
   });
 });
