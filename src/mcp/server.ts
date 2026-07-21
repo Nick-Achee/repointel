@@ -197,12 +197,19 @@ export function createRepointelServer(): McpServer {
           }
         }
 
-        if (planGoal && seeds && seeds.length > 0) {
-          (payload as Record<string, unknown>).plan = await buildPlan(
-            planGoal,
-            seeds,
-            { root: repoRoot }
-          );
+        if (planGoal) {
+          if (seeds && seeds.length > 0) {
+            (payload as Record<string, unknown>).plan = await buildPlan(
+              planGoal,
+              seeds,
+              { root: repoRoot }
+            );
+          } else {
+            (payload as Record<string, unknown>).plan = {
+              error:
+                "planGoal requires seeds (the files or directories the change touches).",
+            };
+          }
         }
 
         return {
