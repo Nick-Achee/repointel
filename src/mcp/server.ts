@@ -1,5 +1,6 @@
 import * as path from "node:path";
 import * as fs from "node:fs";
+import { createRequire } from "node:module";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { loadRuntime } from "./runtime.js";
@@ -18,10 +19,21 @@ Returns JSON: observe (file counts, frameworks), orient (features, task progress
 stats), decide (ranked actions), artifacts (paths to written files), and slice when seeds
 are given.`;
 
+function packageVersion(): string {
+  try {
+    const pkg = createRequire(import.meta.url)("../../package.json") as {
+      version?: string;
+    };
+    return pkg.version ?? "0.0.0";
+  } catch {
+    return "0.0.0";
+  }
+}
+
 export function createRepointelServer(): McpServer {
   const server = new McpServer({
     name: "repointel",
-    version: "0.4.1",
+    version: packageVersion(),
   });
 
   server.registerTool(
