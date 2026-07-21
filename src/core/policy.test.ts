@@ -43,3 +43,43 @@ describe("compileRule", () => {
     expect(exps.every((e) => e.kind === "path-forbidden")).toBe(true);
   });
 });
+
+import { describe as d2, it as i2, expect as e2 } from "vitest";
+import * as fs from "node:fs";
+import * as os from "node:os";
+import * as path from "node:path";
+import { generateIndex } from "./indexer.js";
+import { buildDepGraph } from "./dep-graph.js";
+import { derivePolicy } from "./policy.js";
+
+d2("derivePolicy", () => {
+  i2("proposes labels from directories and forbidden rules the code already satisfies", async () => {
+    const r = fs.mkdtempSync(path.join(os.tmpdir(), "repointel-derive-"));
+    try {
+      const w = (rel: string, c: string) => {
+        const abs = path.join(r, rel);
+        fs.mkdirSync(path.dirname(abs), { recursive: true });
+        fs.writeFileSync(abs, c);
+      };
+      w("package.json", JSON.stringify({ name: "p", version: "1" }));
+      // ui -> core, and core never imports ui: "core must not import ui" is satisfied.
+      w("src/ui/page.ts", 'import { u } from "../core/util";\nexport const p = u;');
+      w("src/core/util.ts", "export const u = 1;");
+
+      const index = await generateIndex({ root: r });
+      const graph = await buildDepGraph({ root: r });
+      const policy = derivePolicy(index, graph);
+
+      e2(policy.labels.map((l) => l.label).sort()).toEqual(["core", "ui"]);
+      e2(policy.labels.every((l) => l.provenance === "inferred")).toBe(true);
+      // proposes the satisfied invariant core -> ui, unratified
+      const rule = policy.forbidden.find((f) => f.from === "core" && f.to === "ui");
+      e2(rule).toBeDefined();
+      e2(rule!.ratified).toBe(false);
+      // does NOT propose ui -> core (that edge exists, so it is not an invariant)
+      e2(policy.forbidden.find((f) => f.from === "ui" && f.to === "core")).toBeUndefined();
+    } finally {
+      fs.rmSync(r, { recursive: true, force: true });
+    }
+  });
+});

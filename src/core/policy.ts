@@ -1,5 +1,7 @@
 import { matchesPattern } from "./utils.js";
 import type { Expectation } from "./contract.js";
+import type { RepoIndex, DepGraph } from "../types/index.js";
+import { inferBoundaries } from "./understand.js";
 
 export interface PolicyLabel {
   label: string;
@@ -69,4 +71,47 @@ export function compileRule(
     }
   }
   return out;
+}
+
+/**
+ * Derive a candidate policy from the current graph: directory labels (inferred)
+ * plus every directional invariant the code already satisfies (from -> to where
+ * no edge from-label -> to-label exists), proposed unratified.
+ */
+export function derivePolicy(index: RepoIndex, graph: DepGraph): ArchitecturePolicy {
+  const boundaries = inferBoundaries(index, graph);
+  const labels: PolicyLabel[] = boundaries.map((b) => ({
+    label: b.label,
+    include: b.globs,
+    provenance: "inferred",
+  }));
+
+  // Which label->label directions currently have at least one edge?
+  const existing = new Set<string>();
+  const labelOf = new Map<string, string>();
+  for (const b of boundaries) {
+    for (const f of index.files) {
+      if (b.globs.some((g) => f.relativePath.startsWith(`src/${b.label}/`)))
+        labelOf.set(f.relativePath, b.label);
+    }
+  }
+  for (const e of graph.edges) {
+    const f = labelOf.get(e.from);
+    const t = labelOf.get(e.to);
+    if (f && t && f !== t) existing.add(`${f} -> ${t}`);
+  }
+
+  const names = boundaries.map((b) => b.label);
+  const forbidden: PolicyRule[] = [];
+  for (const from of names) {
+    for (const to of names) {
+      if (from === to) continue;
+      // Propose forbidding a direction only if the code already satisfies it.
+      if (!existing.has(`${from} -> ${to}`)) {
+        forbidden.push({ from, to, kind: "edge", ratified: false });
+      }
+    }
+  }
+
+  return { version: "1.0.0", labels, forbidden, entrypoints: [] };
 }
