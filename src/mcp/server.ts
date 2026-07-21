@@ -5,6 +5,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { loadRuntime } from "./runtime.js";
 import { evaluateGuard } from "../core/guard.js";
+import { buildPlan } from "../core/plan.js";
 import type { ArchitecturePolicy } from "../core/policy.js";
 import { readJson } from "../core/utils.js";
 
@@ -76,6 +77,13 @@ export function createRepointelServer(): McpServer {
           .describe(
             "Also return the architecture fitness report from .repointel/architecture.json (Guard layer)."
           ),
+        planGoal: z
+          .string()
+          .optional()
+          .describe(
+            "Compose a graph-grounded OODA Feature Plan for this goal. Requires seeds. " +
+              "Deterministic sections are filled from the graph; judgment sections are questions."
+          ),
         symbol: z
           .string()
           .optional()
@@ -93,7 +101,7 @@ export function createRepointelServer(): McpServer {
           ),
       },
     },
-    async ({ root, seeds, name, refresh, includeTests, symbol, contract, guard }) => {
+    async ({ root, seeds, name, refresh, includeTests, symbol, contract, guard, planGoal }) => {
       const repoRoot = root || process.cwd();
 
       try {
@@ -187,6 +195,14 @@ export function createRepointelServer(): McpServer {
               error: "no .repointel/architecture.json — run `repointel teach init`",
             };
           }
+        }
+
+        if (planGoal && seeds && seeds.length > 0) {
+          (payload as Record<string, unknown>).plan = await buildPlan(
+            planGoal,
+            seeds,
+            { root: repoRoot }
+          );
         }
 
         return {
