@@ -91,7 +91,9 @@ export function derivePolicy(index: RepoIndex, graph: DepGraph): ArchitecturePol
   const labelOf = new Map<string, string>();
   for (const b of boundaries) {
     for (const f of index.files) {
-      if (b.globs.some((g) => f.relativePath.startsWith(`src/${b.label}/`)))
+      // Use the same glob matcher guard uses, so derive's candidate rules and
+      // guard's evaluation label every file identically.
+      if (b.globs.some((g) => matchesPattern(f.relativePath, g)))
         labelOf.set(f.relativePath, b.label);
     }
   }

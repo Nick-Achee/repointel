@@ -1,4 +1,5 @@
 import type { RepoIndex, DepGraph } from "../types/index.js";
+import { matchesPattern } from "./utils.js";
 
 export interface Boundary {
   label: string;
@@ -45,16 +46,30 @@ export function inferBoundaries(index: RepoIndex, graph: DepGraph): Boundary[] {
     cross.get(from)!.push({ from: edge.from, to: edge.to, line: edge.line });
   }
 
+  // Member files per label, to reject degenerate labels (e.g. "src"/"root"
+  // for src-root files) whose glob matches none of their own files.
+  const memberFiles = new Map<string, string[]>();
+  for (const [file, label] of labelOf) {
+    if (!memberFiles.has(label)) memberFiles.set(label, []);
+    memberFiles.get(label)!.push(file);
+  }
+
   const labels = [...new Set(labelOf.values())].sort();
-  return labels.map((label) => {
-    const e = ce.get(label) ?? 0;
-    const a = ca.get(label) ?? 0;
-    return {
-      label,
-      globs: [...(globs.get(label) ?? [])],
-      provenance: "inferred" as const,
-      instability: e + a === 0 ? 0 : e / (e + a),
-      crossEdges: cross.get(label) ?? [],
-    };
-  });
+  return labels
+    .map((label) => {
+      const e = ce.get(label) ?? 0;
+      const a = ca.get(label) ?? 0;
+      return {
+        label,
+        globs: [...(globs.get(label) ?? [])],
+        provenance: "inferred" as const,
+        instability: e + a === 0 ? 0 : e / (e + a),
+        crossEdges: cross.get(label) ?? [],
+      };
+    })
+    .filter((b) =>
+      (memberFiles.get(b.label) ?? []).some((f) =>
+        b.globs.some((g) => matchesPattern(f, g))
+      )
+    );
 }

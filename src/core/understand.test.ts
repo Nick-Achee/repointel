@@ -39,4 +39,28 @@ describe("inferBoundaries", () => {
     );
     expect(byLabel.ui.provenance).toBe("inferred");
   });
+
+  it("drops degenerate boundaries whose glob matches no file (src-root files)", async () => {
+    const r = fs.mkdtempSync(path.join(os.tmpdir(), "repointel-degenerate-"));
+    try {
+      const w = (rel: string, c: string) => {
+        const abs = path.join(r, rel);
+        fs.mkdirSync(path.dirname(abs), { recursive: true });
+        fs.writeFileSync(abs, c);
+      };
+      w("package.json", JSON.stringify({ name: "p", version: "1" }));
+      w("src/index.ts", 'export { u } from "./core/util";'); // src-root file
+      w("src/core/util.ts", "export const u = 1;");
+
+      const index = await generateIndex({ root: r });
+      const graph = await buildDepGraph({ root: r });
+      const labels = inferBoundaries(index, graph).map((b) => b.label);
+
+      expect(labels).toContain("core");
+      expect(labels).not.toContain("src"); // no phantom label for src/index.ts
+      expect(labels).not.toContain("root");
+    } finally {
+      fs.rmSync(r, { recursive: true, force: true });
+    }
+  });
 });
