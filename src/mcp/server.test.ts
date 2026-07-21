@@ -229,4 +229,14 @@ describe("repointel MCP server", () => {
     const payload = callResult(result);
     expect(payload.plan.error).toMatch(/seed/i);
   });
+
+  it("returns a drift report when driftSince is given", async () => {
+    const result = await client.callTool({
+      name: "repo_intel",
+      arguments: { root: repoRoot, driftSince: "HEAD" },
+    });
+    const payload = callResult(result);
+    expect(payload.drift).toBeDefined();
+    expect(payload.drift).toHaveProperty("diff");
+  });
 });
