@@ -380,3 +380,28 @@ describe("findSCCs edge cases", () => {
     expect(() => findSCCs(edges)).not.toThrow();
   });
 });
+
+describe("cycle enumeration cap honesty", () => {
+  it("marks all SCC members circular even when cycle enumeration is capped", async () => {
+    // A complete digraph K7 has >2000 elementary cycles — well past MAX_CYCLES.
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "repointel-k7-"));
+    try {
+      const n = 7;
+      for (let i = 0; i < n; i++) {
+        const imports = [];
+        for (let j = 0; j < n; j++) if (j !== i) imports.push(`import "./f${j}";`);
+        const abs = path.join(root, "src", `f${i}.ts`);
+        fs.mkdirSync(path.dirname(abs), { recursive: true });
+        fs.writeFileSync(abs, `${imports.join("\n")}\nexport const f${i} = ${i};`);
+      }
+
+      const graph = await buildDepGraph({ root });
+      const circular = graph.nodes.filter((x) => x.isCircular).length;
+
+      expect(circular).toBe(n); // every node is on a cycle, cap or no cap
+      expect(graph.stats.cyclesTruncated).toBe(true);
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+});

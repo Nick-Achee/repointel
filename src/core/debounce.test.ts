@@ -56,3 +56,27 @@ describe("createDebouncer", () => {
     expect(order.slice(0, 2)).toEqual(["start", "end"]);
   });
 });
+
+describe("createDebouncer error safety", () => {
+  it("does not wedge or reject unhandled when fn throws", async () => {
+    const rejections: unknown[] = [];
+    const onRej = (e: unknown) => rejections.push(e);
+    process.on("unhandledRejection", onRej);
+
+    let calls = 0;
+    const trigger = createDebouncer(async () => {
+      calls++;
+      if (calls === 1) throw new Error("boom");
+    }, 50);
+
+    trigger();
+    await vi.advanceTimersByTimeAsync(50);
+    trigger();
+    await vi.advanceTimersByTimeAsync(50);
+    await vi.advanceTimersByTimeAsync(0);
+
+    process.off("unhandledRejection", onRej);
+    expect(calls).toBe(2); // not wedged after the throw
+    expect(rejections).toHaveLength(0); // no unhandled rejection
+  });
+});

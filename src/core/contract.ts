@@ -132,6 +132,15 @@ export function evaluateContract(
           matches: matches.length > 0 ? matches : undefined,
         };
       }
+      default: {
+        // Untrusted JSON: an unknown kind must not crash — treat it as absent.
+        const kind = (expectation as { kind?: unknown }).kind;
+        return {
+          expectation,
+          classification: "absent",
+          detail: `unknown expectation kind: ${String(kind)}`,
+        };
+      }
     }
   });
 

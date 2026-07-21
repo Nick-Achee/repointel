@@ -149,3 +149,17 @@ describe("deriveContractFromDiff", () => {
     fs.rmSync(path.join(root, "src/feature"), { recursive: true, force: true });
   });
 });
+
+describe("evaluateContract robustness", () => {
+  it("does not throw on an unknown expectation kind", async () => {
+    const { index, graph } = await graphAndIndex();
+    const contract = {
+      name: "malformed",
+      expect: [{ kind: "edge-banned", from: "a", to: "b" } as never],
+    };
+    expect(() => evaluateContract(contract, index, graph)).not.toThrow();
+    const result = evaluateContract(contract, index, graph);
+    expect(result.ok).toBe(false);
+    expect(result.results[0].classification).toBe("absent");
+  });
+});

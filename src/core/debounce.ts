@@ -22,11 +22,14 @@ export function createDebouncer(
     running = true;
     try {
       await fn();
+    } catch {
+      // A rejecting fn must not wedge the debouncer or escalate to an
+      // unhandled rejection (which terminates the process under Node's default).
     } finally {
       running = false;
       if (pending) {
         pending = false;
-        run();
+        void run();
       }
     }
   };

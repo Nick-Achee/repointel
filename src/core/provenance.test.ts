@@ -79,6 +79,61 @@ describe("React metric suppression", () => {
   });
 });
 
+describe("export extraction", () => {
+  it("records the public (post-`as`) name of an aliased export", async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "repointel-alias-exp-"));
+    try {
+      write(root, "package.json", JSON.stringify({ name: "p", version: "1" }));
+      write(
+        root,
+        "src/mod.ts",
+        "function internalApi() {}\nexport { internalApi as PublicApi };"
+      );
+
+      const index = await generateIndex({ root });
+      const exp = index.files.find((f) => f.relativePath === "src/mod.ts")!.exports;
+
+      expect(exp).toContain("PublicApi");
+      expect(exp).not.toContain("internalApi");
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("records the namespace name of `export * as ns`", async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "repointel-star-ns-"));
+    try {
+      write(root, "package.json", JSON.stringify({ name: "p", version: "1" }));
+      write(root, "src/icons.ts", "export const Icon = 1;");
+      write(root, "src/index.ts", 'export * as icons from "./icons";');
+
+      const index = await generateIndex({ root });
+      const exp = index.files.find((f) => f.relativePath === "src/index.ts")!.exports;
+
+      expect(exp).toContain("icons");
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("forwards a bare `export * from` barrel's re-exported names", async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "repointel-star-barrel-"));
+    try {
+      write(root, "package.json", JSON.stringify({ name: "p", version: "1" }));
+      write(root, "src/lib/mailer.ts", "export function send() {}\nexport function receive() {}");
+      write(root, "src/lib/index.ts", 'export * from "./mailer";');
+
+      const index = await generateIndex({ root });
+      const barrel = index.files.find((f) => f.relativePath === "src/lib/index.ts")!;
+
+      expect(barrel.exports).toContain("send");
+      expect(barrel.exports).toContain("receive");
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+});
+
 describe("stable symbol ids", () => {
   it("attaches a SCIP-style id and kind to each exported symbol", async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "repointel-sym-"));
