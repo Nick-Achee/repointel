@@ -1,5 +1,40 @@
 # Changelog
 
+## 0.7.0
+
+The **Guide** layer — completes the OODA architecture engine. `repointel plan` turns the
+OODA SOP from a static template into a live, graph-grounded document: deterministic sections
+filled from the real graph, judgment sections asked as questions, never faked.
+
+### Added
+
+- **`repointel plan "<goal>" --seeds <area>`** — composes an Observe → Orient → Decide → Act
+  Feature Plan document (written to `.repointel/plans/<slug>.md`, `--json` for the structured
+  object):
+  - **Observe** (measured): the PageRank-ranked seed slice with rank values + context pack.
+  - **Orient** (inferred): directory boundaries with Martin instability `I = Ce/(Ca+Ce)`;
+    volatility and business primitives as **questions**.
+  - **Decide** (measured): the Guard fitness report + the impact of the seed area; pattern
+    choice and invariants as **questions**.
+  - **Act**: a contract skeleton of expected graph deltas to complete and verify with
+    `repointel contract check`.
+- **`planGoal`** on the `repo_intel` MCP tool (with `seeds`) — returns the structured plan;
+  returns an explicit hint when seeds are missing.
+- The OODA engine is now importable as a library: `buildPlan`, `renderPlan`, `evaluateGuard`,
+  `derivePolicy`, `inferBoundaries` are re-exported from the package root.
+
+### Integrity
+
+- The pre-fill/ask boundary is the point: the plan auto-fills only what a graph **fact**
+  answers and **asks** everything else. Provenance (`measured`/`inferred`) is printed per
+  section; no inferred guess is ever stated as fact. Verified by adversarial review.
+
+### Notes
+
+- `plan` is a **composer** — it computes no new graph fact, only arranges the existing
+  pipeline's outputs into the SOP shape.
+- Deferred to a later release: the `drift` and `reorient` protocols. No index-format change.
+
 ## 0.6.0
 
 The architecture-fitness spine — the first layer of the OODA architecture engine. Extends
