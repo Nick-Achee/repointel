@@ -13,6 +13,7 @@ import { visualizeCommand } from "../commands/visualize.js";
 import { specifyCommand } from "../commands/specify.js";
 import { oodaCommand } from "../commands/ooda.js";
 import { teachInit } from "../commands/teach.js";
+import { guardCheck } from "../commands/guard.js";
 
 const program = new Command();
 
@@ -194,6 +195,21 @@ program
       return;
     }
     await teachInit({});
+  });
+
+// repointel guard - check the codebase against its architecture policy
+program
+  .command("guard")
+  .description("Check the codebase against its architecture policy (Guard layer)")
+  .argument("[action]", "action: check", "check")
+  .option("-j, --json", "Machine-readable report")
+  .action(async (action: string, opts: { json?: boolean }) => {
+    if (action !== "check") {
+      console.error(`Unknown guard action: ${action}. Try: guard check`);
+      process.exitCode = 2;
+      return;
+    }
+    await guardCheck({ json: opts.json });
   });
 
 // repointel ooda - Main entry point for OODA workflow
