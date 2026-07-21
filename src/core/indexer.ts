@@ -2,6 +2,7 @@ import fg from "fast-glob";
 import * as path from "node:path";
 import type {
   FileInfo,
+  SymbolInfo,
   FileType,
   RepoIndex,
   HookCounts,
@@ -20,13 +21,15 @@ import {
   hashFile,
   getGitCommit,
   getGitBranch,
+  getProjectIdentity,
   countPattern,
   filePathToRoutePath,
   writeJson,
   readJson,
 } from "./utils.js";
+import { scipSymbol, classifyExports, type PackageRef } from "./symbol-id.js";
 
-const INDEX_VERSION = "1.2.0";
+const INDEX_VERSION = "1.3.0";
 
 /**
  * Default file patterns to scan
@@ -460,7 +463,11 @@ function detectAntiPatterns(content: string): AntiPatternCounts {
 /**
  * Analyze a single file
  */
-function analyzeFile(relativePath: string, repoRoot: string): FileInfo | null {
+function analyzeFile(
+  relativePath: string,
+  repoRoot: string,
+  pkg: PackageRef
+): FileInfo | null {
   const absolutePath = path.join(repoRoot, relativePath);
   const content = readFileSafe(absolutePath);
   if (!content) return null;
@@ -481,6 +488,13 @@ function analyzeFile(relativePath: string, repoRoot: string): FileInfo | null {
   );
 
   const fileExports = extractExports(content);
+  const exportKinds = classifyExports(content);
+  const symbols: SymbolInfo[] = fileExports
+    .filter((name) => name !== "default")
+    .map((name) => {
+      const kind = exportKinds[name] ?? "term";
+      return { name, kind, id: scipSymbol(pkg, relativePath, name, kind) };
+    });
 
   return {
     path: absolutePath,
@@ -493,6 +507,7 @@ function analyzeFile(relativePath: string, repoRoot: string): FileInfo | null {
     importBindings: extractImportBindings(content),
     importLines: extractImportLines(content),
     exports: fileExports,
+    symbols,
     symbolRefs: extractSymbolRefs(content, fileExports),
     hooks: countHooks(content),
     sideEffects: countSideEffects(content),
@@ -684,9 +699,15 @@ export async function generateIndex(options: ScanOptions = {}): Promise<RepoInde
         absolute: false,
       });
 
+  const identity = getProjectIdentity(repoRoot);
+  const pkgRef: PackageRef = {
+    name: identity.name || path.basename(repoRoot),
+    version: identity.version,
+  };
+
   const files: FileInfo[] = [];
   for (const filePath of filePaths) {
-    const info = analyzeFile(filePath, repoRoot);
+    const info = analyzeFile(filePath, repoRoot, pkgRef);
     if (info) files.push(info);
   }
 

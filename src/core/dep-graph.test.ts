@@ -2,7 +2,7 @@ import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { buildDepGraph, buildDepGraphFromSeeds, findDependents } from "./dep-graph.js";
+import { buildDepGraph, buildDepGraphFromSeeds, findDependents, findSCCs } from "./dep-graph.js";
 
 let repoRoot: string;
 
@@ -279,5 +279,104 @@ describe("tsconfig path alias resolution", () => {
       root: aliasRoot,
     });
     expect(graph.nodes.map((n) => n.id)).toContain("lib/helper.ts");
+  });
+});
+
+describe("cycle detection (Tarjan SCC)", () => {
+  let cycleRoot: string;
+
+  beforeAll(() => {
+    cycleRoot = fs.mkdtempSync(path.join(os.tmpdir(), "repointel-cycle-"));
+    const write = (rel: string, content: string) => {
+      const abs = path.join(cycleRoot, rel);
+      fs.mkdirSync(path.dirname(abs), { recursive: true });
+      fs.writeFileSync(abs, content);
+    };
+    // The documented counterexample the naive one-pass DFS fails:
+    // a->b, a->c, b->d, c->d, d->a. Two elementary cycles (a-b-d, a-c-d);
+    // the old code reported one and never marked c circular.
+    write("src/a.ts", 'import "./b";\nimport "./c";\nexport const a = 1;');
+    write("src/b.ts", 'import "./d";\nexport const b = 1;');
+    write("src/c.ts", 'import "./d";\nexport const c = 1;');
+    write("src/d.ts", 'import "./a";\nexport const d = 1;');
+    // An acyclic island that must stay unmarked.
+    write("src/x.ts", 'import "./y";\nexport const x = 1;');
+    write("src/y.ts", "export const y = 1;");
+  });
+
+  afterAll(() => {
+    fs.rmSync(cycleRoot, { recursive: true, force: true });
+  });
+
+  it("marks every node on a cycle as circular, including cross-edge nodes", async () => {
+    const graph = await buildDepGraph({ root: cycleRoot });
+    const circular = new Set(
+      graph.nodes.filter((n) => n.isCircular).map((n) => n.id)
+    );
+
+    expect(circular).toEqual(
+      new Set(["src/a.ts", "src/b.ts", "src/c.ts", "src/d.ts"])
+    );
+  });
+
+  it("leaves acyclic files unmarked", async () => {
+    const graph = await buildDepGraph({ root: cycleRoot });
+    const byId = new Map(graph.nodes.map((n) => [n.id, n]));
+
+    expect(byId.get("src/x.ts")?.isCircular).toBeFalsy();
+    expect(byId.get("src/y.ts")?.isCircular).toBeFalsy();
+  });
+
+  it("reports both elementary cycles, order-independently", async () => {
+    const graph = await buildDepGraph({ root: cycleRoot });
+    const asSets = graph.cycles.map((c) => [...c].sort().join(","));
+
+    expect(graph.cycles.length).toBe(2);
+    expect(asSets).toContain("src/a.ts,src/b.ts,src/d.ts");
+    expect(asSets).toContain("src/a.ts,src/c.ts,src/d.ts");
+  });
+});
+
+describe("findSCCs edge cases", () => {
+  it("detects a self-loop as a nontrivial component", () => {
+    const edges = new Map([["a", ["a"]]]);
+    expect(findSCCs(edges)).toEqual([["a"]]);
+  });
+
+  it("ignores a size-1 component with no self-loop", () => {
+    const edges = new Map([
+      ["a", ["b"]],
+      ["b", []],
+    ]);
+    expect(findSCCs(edges)).toEqual([]);
+  });
+
+  it("separates two disjoint cycles into two components", () => {
+    const edges = new Map([
+      ["a", ["b"]],
+      ["b", ["a"]],
+      ["c", ["d"]],
+      ["d", ["c"]],
+    ]);
+    const sccs = findSCCs(edges).map((s) => [...s].sort().join(","));
+    expect(sccs.sort()).toEqual(["a,b", "c,d"]);
+  });
+
+  it("groups a figure-eight (two cycles sharing one node) into one component", () => {
+    // a->b->a and a->c->a share node a: all three are mutually reachable.
+    const edges = new Map([
+      ["a", ["b", "c"]],
+      ["b", ["a"]],
+      ["c", ["a"]],
+    ]);
+    expect(findSCCs(edges)[0].sort()).toEqual(["a", "b", "c"]);
+  });
+
+  it("survives a deep chain without stack overflow (iterative)", () => {
+    const edges = new Map<string, string[]>();
+    const N = 20000;
+    for (let i = 0; i < N; i++) edges.set(`n${i}`, [`n${i + 1}`]);
+    edges.set(`n${N}`, ["n0"]); // one big cycle at the end
+    expect(() => findSCCs(edges)).not.toThrow();
   });
 });

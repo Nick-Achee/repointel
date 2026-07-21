@@ -72,6 +72,13 @@ export type FileType =
   | "schema"    // DB schema files
   | "unknown";
 
+export interface SymbolInfo {
+  name: string;
+  kind: "term" | "type" | "function" | "namespace";
+  /** Stable SCIP-style identifier, e.g. "pkg 1.0.0 src/x.ts/foo()." */
+  id: string;
+}
+
 export interface FileInfo {
   path: string;
   relativePath: string;
@@ -85,6 +92,8 @@ export interface FileInfo {
   /** Line number (1-based) of each module specifier's import statement */
   importLines?: Record<string, number>;
   exports: string[];
+  /** Stable SCIP-style id + kind for each exported symbol (diffable across runs) */
+  symbols?: SymbolInfo[];
   /** Exported symbol -> sibling exports its body references (delegation) */
   symbolRefs?: Record<string, string[]>;
   hooks: HookCounts;
@@ -176,6 +185,8 @@ export interface DepNode {
   isExternal: boolean;
   isCircular?: boolean;
   depth?: number;          // depth from seed file
+  /** Stable SCIP-style id + kind for each exported symbol */
+  symbols?: SymbolInfo[];
   /** Exported symbol -> sibling exports its body references (delegation) */
   symbolRefs?: Record<string, string[]>;
 }

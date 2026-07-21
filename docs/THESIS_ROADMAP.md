@@ -46,23 +46,30 @@ nobody else offers is the **contract audit** (pillar 3).
 
 ## Architecture (four phases)
 
-### Phase 1 — Honest graph (in progress)
+### Phase 1 — Honest graph (largely done)
 
-The contract is worthless if the graph lies. Done so far (test-first): directory-seed
-expansion; `export … from` re-export extraction. Remaining, in order:
+The contract is worthless if the graph lies. Done (all test-first):
 
-1. Real tsconfig alias resolution (JSONC-tolerant parse, `paths`/`baseUrl`, `extends`) —
+1. ✅ Directory-seed expansion; `export … from` re-export extraction.
+2. ✅ Real tsconfig alias resolution (JSONC-tolerant parse, `paths`/`baseUrl`, `extends`) —
    replaces the hardcoded `@/ → src/`.
-2. Fix `matchesPattern` glob compilation (escape first, substitute glob tokens after — or
-   adopt picomatch, already transitively present).
-3. Tarjan SCC replaces `detectCycles` (proven counterexample on record); fan-in/fan-out/
-   instability per file in the same O(E) pass.
-4. Symbol-level facts via the TypeScript compiler API (no tree-sitter needed for a TS-only
-   tool; Knip proves the pattern): exports, signatures, def/ref tags.
-5. **Stable node IDs** using SCIP-style symbol grammar (`file.ts/resetPassword().`) —
-   prefix-safe, survives re-indexing. Graph deltas are only diffable if IDs are stable.
-   Rename re-identification via content-hash match.
-6. Framework extraction as **plugins with graded facts** (Knip's architecture: 178 per-tool
+3. ✅ `matchesPattern` glob compilation fixed (single-pass token translation).
+4. ✅ **Tarjan SCC replaces `detectCycles`** (iterative, O(V+E), handles the proven
+   cross-edge counterexample) + bounded per-SCC elementary-cycle enumeration. Reverse-dep
+   impact analysis (`findDependents`) with symbol scoping and intra-file delegation.
+5. ✅ Symbol-level facts: exported symbols with kind, plus per-edge imported bindings and
+   import line numbers.
+6. ✅ **Stable node IDs** using SCIP-style symbol grammar
+   (`repointel 0.4.1 src/core/utils.ts/matchesPattern().`) — prefix-safe, survives
+   re-indexing. Graph deltas are only diffable if IDs are stable. *(Remaining: rename
+   re-identification via content-hash match.)*
+7. ✅ Provenance labels (measured vs inferred), dependency-gated framework detection,
+   corrected file-type taxonomy, git/project identity in the payload.
+
+Remaining Phase 1 work:
+
+- Rename re-identification (content-hash match) so a moved file keeps its node identity.
+- Framework extraction as **plugins with graded facts** (Knip's architecture: 178 per-tool
    plugins, enabled by dependency detection). Existence/export/HTTP-method/registrar facts
    are *deterministic* (frameworks mandate static analyzability); type-level schemas and
    usage facts are *heuristic* — the contract vocabulary must respect that line. Prefer

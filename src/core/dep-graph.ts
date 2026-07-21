@@ -277,43 +277,141 @@ function inferFileType(relativePath: string): FileType {
   return "component";
 }
 
+// Enumeration bounds — import cycles are tiny in practice; these keep a
+// pathological graph from exploding.
+const MAX_SCC_ENUMERATE = 50; // skip per-cycle listing above this SCC size
+const MAX_CYCLES = 1000;
+
 /**
- * Detect cycles in the graph using DFS
+ * Find strongly connected components with an iterative Tarjan pass.
+ * Returns only nontrivial components (a directed cycle exists iff a node sits
+ * in an SCC of size >= 2, or a size-1 SCC with a self-loop). Iterative so deep
+ * import chains cannot overflow the call stack. O(V + E).
  */
-function detectCycles(edges: Map<string, string[]>): string[][] {
-  const cycles: string[][] = [];
-  const visited = new Set<string>();
-  const recursionStack = new Set<string>();
-  const currentPath: string[] = [];
+export function findSCCs(edges: Map<string, string[]>): string[][] {
+  const nodes = new Set<string>();
+  for (const [from, tos] of edges) {
+    nodes.add(from);
+    for (const t of tos) nodes.add(t);
+  }
 
-  function dfs(node: string): void {
-    visited.add(node);
-    recursionStack.add(node);
-    currentPath.push(node);
+  let counter = 0;
+  const index = new Map<string, number>();
+  const lowlink = new Map<string, number>();
+  const onStack = new Set<string>();
+  const stack: string[] = [];
+  const sccs: string[][] = [];
 
-    const neighbors = edges.get(node) || [];
-    for (const neighbor of neighbors) {
-      if (!visited.has(neighbor)) {
-        dfs(neighbor);
-      } else if (recursionStack.has(neighbor)) {
-        // Found a cycle
-        const cycleStart = currentPath.indexOf(neighbor);
-        if (cycleStart !== -1) {
-          cycles.push([...currentPath.slice(cycleStart)]);
+  for (const start of nodes) {
+    if (index.has(start)) continue;
+    const work: Array<{ node: string; i: number }> = [{ node: start, i: 0 }];
+
+    while (work.length > 0) {
+      const frame = work[work.length - 1];
+      const v = frame.node;
+
+      if (frame.i === 0) {
+        index.set(v, counter);
+        lowlink.set(v, counter);
+        counter++;
+        stack.push(v);
+        onStack.add(v);
+      }
+
+      const neighbors = edges.get(v) || [];
+      if (frame.i < neighbors.length) {
+        const w = neighbors[frame.i];
+        frame.i++;
+        if (!index.has(w)) {
+          work.push({ node: w, i: 0 });
+        } else if (onStack.has(w)) {
+          lowlink.set(v, Math.min(lowlink.get(v)!, index.get(w)!));
+        }
+      } else {
+        if (lowlink.get(v) === index.get(v)) {
+          const component: string[] = [];
+          let w: string;
+          do {
+            w = stack.pop()!;
+            onStack.delete(w);
+            component.push(w);
+          } while (w !== v);
+
+          const selfLoop =
+            component.length === 1 && (edges.get(v) || []).includes(v);
+          if (component.length > 1 || selfLoop) sccs.push(component);
+        }
+        work.pop();
+        if (work.length > 0) {
+          const parent = work[work.length - 1].node;
+          lowlink.set(parent, Math.min(lowlink.get(parent)!, lowlink.get(v)!));
         }
       }
     }
-
-    currentPath.pop();
-    recursionStack.delete(node);
   }
 
-  for (const node of edges.keys()) {
-    if (!visited.has(node)) {
-      dfs(node);
+  return sccs;
+}
+
+/**
+ * Enumerate elementary cycles within one SCC. Each cycle is reported once
+ * (rooted at its lowest-ranked member, exploring only higher-ranked nodes),
+ * so no rotations or duplicates. Bounded by MAX_CYCLES.
+ */
+function cyclesInSCC(
+  scc: string[],
+  edges: Map<string, string[]>,
+  out: string[][]
+): void {
+  const members = new Set(scc);
+  const order = [...scc].sort();
+  const rank = new Map(order.map((n, i) => [n, i] as const));
+  const neighborsIn = (n: string) =>
+    (edges.get(n) || []).filter((m) => members.has(m));
+
+  for (const startNode of order) {
+    const startRank = rank.get(startNode)!;
+    const path: string[] = [];
+    const onPath = new Set<string>();
+
+    const dfs = (v: string): void => {
+      if (out.length >= MAX_CYCLES) return;
+      path.push(v);
+      onPath.add(v);
+      for (const w of neighborsIn(v)) {
+        if (w === startNode) {
+          out.push([...path]);
+          if (out.length >= MAX_CYCLES) break;
+        } else if (!onPath.has(w) && rank.get(w)! > startRank) {
+          dfs(w);
+        }
+      }
+      path.pop();
+      onPath.delete(v);
+    };
+
+    dfs(startNode);
+    if (out.length >= MAX_CYCLES) return;
+  }
+}
+
+/**
+ * Detect elementary cycles: Tarjan SCC to find which nodes are on cycles,
+ * then per-SCC enumeration. Correct and order-independent, unlike naive
+ * one-pass back-edge DFS (which misses cycles closed by cross edges).
+ */
+function detectCycles(edges: Map<string, string[]>): string[][] {
+  const cycles: string[][] = [];
+  for (const scc of findSCCs(edges)) {
+    if (scc.length > MAX_SCC_ENUMERATE) {
+      // Too large to enumerate cheaply — report the component itself so its
+      // members are still counted and marked circular.
+      cycles.push([...scc].sort());
+      continue;
     }
+    cyclesInSCC(scc, edges, cycles);
+    if (cycles.length >= MAX_CYCLES) break;
   }
-
   return cycles;
 }
 
@@ -347,6 +445,7 @@ export async function buildDepGraph(options: GraphOptions = {}): Promise<DepGrap
       path: file.path,
       type: file.type,
       isExternal: false,
+      symbols: file.symbols,
       symbolRefs: file.symbolRefs,
     });
 
@@ -516,6 +615,8 @@ export async function buildDepGraphFromSeeds(
       type: fileInfo?.type || inferFileType(currentPath),
       isExternal: false,
       depth,
+      symbols: fileInfo?.symbols,
+      symbolRefs: fileInfo?.symbolRefs,
     });
 
     const imports = fileInfo?.imports || [];
@@ -661,11 +762,11 @@ export function findDependents(
   // reached so consumers can see the blast radius in order.
   const edgeBetween = new Map<string, DepEdge>();
   for (const edge of graph.edges) {
-    const key = `${edge.from} ${edge.to}`;
+    const key = `${edge.from} ${edge.to}`;
     if (!edgeBetween.has(key)) edgeBetween.set(key, edge);
   }
   const describe = (file: string, via: string, depth: number): ImpactDetail => {
-    const edge = edgeBetween.get(`${file} ${via}`);
+    const edge = edgeBetween.get(`${file} ${via}`);
     return { file, depth, via, symbols: edge?.symbols, line: edge?.line };
   };
 
@@ -674,7 +775,7 @@ export function findDependents(
 
   for (const file of [...direct].sort()) {
     const via = targets.find((t) =>
-      edgeBetween.has(`${file} ${t}`)
+      edgeBetween.has(`${file} ${t}`)
     );
     details.push(describe(file, via ?? targets[0], 1));
   }

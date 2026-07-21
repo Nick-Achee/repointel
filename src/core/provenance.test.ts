@@ -79,6 +79,36 @@ describe("React metric suppression", () => {
   });
 });
 
+describe("stable symbol ids", () => {
+  it("attaches a SCIP-style id and kind to each exported symbol", async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "repointel-sym-"));
+    try {
+      write(
+        root,
+        "package.json",
+        JSON.stringify({ name: "toolcli", version: "1.2.3" })
+      );
+      write(
+        root,
+        "src/util.ts",
+        "export function matchesPattern() {}\nexport const MAX = 1;\nexport type Id = string;"
+      );
+
+      const index = await generateIndex({ root });
+      const file = index.files.find((f) => f.relativePath === "src/util.ts");
+      const byName = new Map(file?.symbols?.map((s) => [s.name, s]));
+
+      expect(byName.get("matchesPattern")?.id).toBe(
+        "toolcli 1.2.3 src/util.ts/matchesPattern()."
+      );
+      expect(byName.get("MAX")?.kind).toBe("term");
+      expect(byName.get("Id")?.kind).toBe("type");
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+});
+
 describe("provenance", () => {
   it("labels measured facts and inferred guesses so they cannot be confused", async () => {
     const index = await generateIndex({ root: cliRoot });

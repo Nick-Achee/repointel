@@ -35,10 +35,20 @@ export {
   buildDepGraphFromSeeds,
   expandSeeds,
   findDependents,
+  findSCCs,
   saveDepGraph,
   loadDepGraph,
   depGraphToMermaid,
 } from "./core/dep-graph.js";
+
+// Core - Stable symbol identifiers
+export {
+  scipSymbol,
+  fileSymbol,
+  classifyExports,
+  type SymbolKind,
+  type PackageRef,
+} from "./core/symbol-id.js";
 
 // Core - Route Graph
 export {
