@@ -40,3 +40,41 @@ describe("sliceFeature seeds", () => {
     ).rejects.toThrow(/no.*match|not found|resolve/i);
   });
 });
+
+describe("sliceFeature ranking", () => {
+  let rankRoot: string;
+
+  beforeAll(() => {
+    rankRoot = fs.mkdtempSync(path.join(os.tmpdir(), "repointel-rank-"));
+    const w = (rel: string, content: string) => {
+      const abs = path.join(rankRoot, rel);
+      fs.mkdirSync(path.dirname(abs), { recursive: true });
+      fs.writeFileSync(abs, content);
+    };
+    // page -> a, page -> b, a -> shared, b -> shared ; shared is central.
+    w("src/page.ts", 'import { a } from "./a";\nimport { b } from "./b";\nexport const p = [a, b];');
+    w("src/a.ts", 'import { shared } from "./shared";\nexport const a = shared;');
+    w("src/b.ts", 'import { shared } from "./shared";\nexport const b = shared;');
+    w("src/shared.ts", "export const shared = 1;");
+  });
+
+  afterAll(() => {
+    fs.rmSync(rankRoot, { recursive: true, force: true });
+  });
+
+  it("assigns a relevance rank to every file and pins the seed first", async () => {
+    const slice = await sliceFeature(["src/page.ts"], "ranked", { root: rankRoot });
+
+    expect(slice.files[0].relativePath).toBe("src/page.ts");
+    for (const f of slice.files) expect(typeof f.rank).toBe("number");
+  });
+
+  it("ranks the shared dependency above the single-path siblings", async () => {
+    const slice = await sliceFeature(["src/page.ts"], "ranked", { root: rankRoot });
+    const rankOf = (p: string) =>
+      slice.files.find((f) => f.relativePath === p)!.rank!;
+
+    expect(rankOf("src/shared.ts")).toBeGreaterThan(rankOf("src/a.ts"));
+    expect(rankOf("src/shared.ts")).toBeGreaterThan(rankOf("src/b.ts"));
+  });
+});

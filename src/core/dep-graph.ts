@@ -16,6 +16,7 @@ import {
   readJson,
 } from "./utils.js";
 import { getIndex } from "./indexer.js";
+import { personalizedPageRank, type RankEdge } from "./rank.js";
 
 const GRAPH_VERSION = "1.0.0";
 
@@ -393,6 +394,36 @@ function cyclesInSCC(
     dfs(startNode);
     if (out.length >= MAX_CYCLES) return;
   }
+}
+
+/**
+ * Whether an edge only carries underscore-private bindings (Aider damps these).
+ */
+function importsOnlyPrivate(edge: DepEdge): boolean {
+  const syms = edge.symbols;
+  if (!syms || syms.length === 0) return false;
+  return syms.every((s) => s.startsWith("_"));
+}
+
+/**
+ * Rank every file in the graph by personalized PageRank from the seeds.
+ * Edge weight follows Aider: sqrt(#bindings), x50 when the edge originates at a
+ * seed file, x0.1 when it carries only underscore-private names.
+ */
+export function rankFromSeeds(
+  graph: DepGraph,
+  seeds: string[]
+): Map<string, number> {
+  const seedSet = new Set(seeds);
+  const nodes = graph.nodes.map((n) => n.id);
+  const edges: RankEdge[] = graph.edges.map((e) => {
+    const refs = e.symbols?.length ?? 1;
+    let weight = Math.sqrt(Math.max(1, refs));
+    if (seedSet.has(e.from)) weight *= 50;
+    if (importsOnlyPrivate(e)) weight *= 0.1;
+    return { from: e.from, to: e.to, weight };
+  });
+  return personalizedPageRank(nodes, edges, seeds);
 }
 
 /**

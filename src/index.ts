@@ -36,10 +36,18 @@ export {
   expandSeeds,
   findDependents,
   findSCCs,
+  rankFromSeeds,
   saveDepGraph,
   loadDepGraph,
   depGraphToMermaid,
 } from "./core/dep-graph.js";
+
+// Core - Relevance ranking
+export {
+  personalizedPageRank,
+  type RankEdge,
+  type RankOptions,
+} from "./core/rank.js";
 
 // Core - Stable symbol identifiers
 export {

@@ -98,7 +98,11 @@ export function createRepointelServer(): McpServer {
           (payload as Record<string, unknown>).slice = {
             name: sliceName,
             seedFiles: slice.seedFiles,
+            // Ordered by personalized-PageRank relevance to the seeds.
             files: slice.files.map((f) => f.relativePath),
+            ranked: slice.files
+              .slice(0, 10)
+              .map((f) => ({ file: f.relativePath, rank: f.rank })),
             totalFiles: slice.summary.totalFiles,
             totalBytes: slice.summary.totalBytes,
             estimatedTokens: slice.summary.totalTokens,

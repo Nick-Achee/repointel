@@ -372,6 +372,8 @@ export interface SliceFile {
   sizeBytes: number;
   depth: number;
   reason: "seed" | "import" | "layout" | "api" | "schema";
+  /** Personalized-PageRank relevance to the seeds (higher = more central) */
+  rank?: number;
 }
 
 export interface ContextSlice {
