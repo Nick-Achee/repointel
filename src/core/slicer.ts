@@ -20,7 +20,7 @@ import {
   matchesPatterns,
 } from "./utils.js";
 import { getIndex } from "./indexer.js";
-import { buildDepGraphFromSeeds, expandSeeds } from "./dep-graph.js";
+import { buildDepGraphFromSeeds, expandSeeds, rankFromSeeds } from "./dep-graph.js";
 
 const SLICE_VERSION = "1.0.0";
 
@@ -150,10 +150,15 @@ export async function sliceRoute(
   let totalBytes = 0;
   let totalTokens = 0;
 
-  // Sort by depth for deterministic output
+  // Order by relevance (personalized PageRank), seeds pinned first.
+  const seedRankSet = new Set(seedFiles);
+  const ranks = rankFromSeeds(depGraph, seedFiles);
   const sortedNodes = [...depGraph.nodes].sort((a, b) => {
-    const depthDiff = (a.depth || 0) - (b.depth || 0);
-    if (depthDiff !== 0) return depthDiff;
+    const aSeed = seedRankSet.has(a.id) ? 1 : 0;
+    const bSeed = seedRankSet.has(b.id) ? 1 : 0;
+    if (aSeed !== bSeed) return bSeed - aSeed;
+    const rankDiff = (ranks.get(b.id) ?? 0) - (ranks.get(a.id) ?? 0);
+    if (rankDiff !== 0) return rankDiff;
     return a.id.localeCompare(b.id);
   });
 
@@ -212,6 +217,7 @@ export async function sliceRoute(
       sizeBytes,
       depth: node.depth || 0,
       reason,
+      rank: ranks.get(relativePath) ?? 0,
     });
 
     totalBytes += sizeBytes;
@@ -307,9 +313,15 @@ export async function sliceFeature(
   let totalTokens = 0;
 
   const seedSet = new Set(expandedSeeds);
+  // Order by relevance (personalized PageRank), seeds pinned first. Under a
+  // budget this keeps the most central files instead of the shallowest.
+  const ranks = rankFromSeeds(depGraph, expandedSeeds);
   const sortedNodes = [...depGraph.nodes].sort((a, b) => {
-    const depthDiff = (a.depth || 0) - (b.depth || 0);
-    if (depthDiff !== 0) return depthDiff;
+    const aSeed = seedSet.has(a.id) ? 1 : 0;
+    const bSeed = seedSet.has(b.id) ? 1 : 0;
+    if (aSeed !== bSeed) return bSeed - aSeed;
+    const rankDiff = (ranks.get(b.id) ?? 0) - (ranks.get(a.id) ?? 0);
+    if (rankDiff !== 0) return rankDiff;
     return a.id.localeCompare(b.id);
   });
 
@@ -364,6 +376,7 @@ export async function sliceFeature(
       sizeBytes,
       depth: node.depth || 0,
       reason,
+      rank: ranks.get(relativePath) ?? 0,
     });
 
     totalBytes += sizeBytes;

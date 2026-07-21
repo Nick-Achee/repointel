@@ -44,6 +44,15 @@ one-shot session-start map. The prefix-safe ranked pack remains the right artifa
 explicit exports (`slice`), just not something injected every turn. The per-turn deliverable
 nobody else offers is the **contract audit** (pillar 3).
 
+## Status (2026-07-21)
+
+**All four phases are implemented and merged/branched.** The loop-with-graph thesis is
+functional end to end: a deterministic, ambiently-fresh graph (Phase 1–2), served ranked
+and on-demand (Phase 3), with intent auditable as expected graph deltas (Phase 4 — the
+wedge no shipped tool offered). 113 tests, typecheck-gated build, CI on Node 20.12/22/24.
+What remains is refinement (rename re-identification, framework plugins, NL→contract
+compilation with human approval), not new load-bearing structure.
+
 ## Architecture (four phases)
 
 ### Phase 1 — Honest graph (largely done)
@@ -76,7 +85,14 @@ Remaining Phase 1 work:
    first-party generated artifacts as ground truth (`.next/routes-manifest.json`,
    Convex `_generated/api.d.ts`, TanStack `routeTree.gen.ts`).
 
-### Phase 2 — Ambient freshness (no daemon required)
+### Phase 2 — Ambient freshness (no daemon required) — ✅ done
+
+Shipped: staleness detection (file-set + mtime + index-version) auto-refreshes on every
+read, so correctness ("always current") holds without a daemon. `repointel watch` is the
+optional accelerator — recursive `fs.watch` with a debouncer that coalesces event storms
+and never overlaps runs, plus an optional live contract gate. The `@parcel/watcher`
+snapshot optimization below stays deferred (native dep; the O(files) stat scan is fine at
+repo scale).
 
 The converged production pattern: **per-file content hashing + file-granularity fact
 ownership**. Watcher (or catch-up diff) → dirty set → re-parse dirty files only → delete
@@ -98,7 +114,14 @@ never invalidate dependents).
   couldn't sustain it), sub-file salsa-style incrementality (overkill at repo scale),
   ctags daemons (never shipped).
 
-### Phase 3 — Serving the graph (cache-safe)
+### Phase 3 — Serving the graph (cache-safe) — ✅ core done
+
+Shipped: personalized PageRank (`rankFromSeeds`, Aider weights: √#bindings, ×50 seed-origin,
+×0.1 private-only) now orders slice files by relevance to the seeds instead of BFS depth, so
+under a budget the most central files survive. `repo_intel` serves reverse-deps
+(`findDependents`), symbol-scoped impact, and ranked context on-demand — never forced (the
+navigation-paradox caution). Deferred: a separate ~1k-token session-start map and
+skeleton-fidelity tiers.
 
 - **On-demand tools** (MCP surface; Serena's adoption at 26.6k stars shows agents adopt
   symbol-granular verbs): `find-symbol`, `who-imports` (reverse deps — a top gap from the
@@ -111,7 +134,17 @@ never invalidate dependents).
 - The "navigation paradox" caution (CodeCompass 2026): never *force* graph traversal —
   serve ranked results when asked, let the agent grep when grepping is right.
 
-### Phase 4 — The wedge: intent compiles to a contract
+### Phase 4 — The wedge: intent compiles to a contract — ✅ core done
+
+Shipped (`src/core/contract.ts`, `repointel contract`, `repo_intel contract` param):
+a `Contract` of `Expectation`s (`file-exists`, `export-exists`, `edge-exists`,
+`edge-forbidden`, globs allowed) evaluated to the Reflexion trichotomy — **convergent**
+(promised+present), **absent** (promised, missing), **divergent** (present, forbidden).
+`contract check` is a CI/hook gate (exit 1 on failure). `contract snapshot` + `contract diff`
+are the verify loop: capture, let the agent work, diff to see what landed;
+`deriveContractFromDiff` turns an observed delta into a reusable contract. Deferred: the
+NL→contract compilation front-half (must be human-approved per the evidence) and Nx-style
+tag constraints.
 
 No shipped tool does this. Every component is proven separately — it's an assembly problem:
 

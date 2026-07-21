@@ -29,7 +29,7 @@ import {
 } from "./utils.js";
 import { scipSymbol, classifyExports, type PackageRef } from "./symbol-id.js";
 
-const INDEX_VERSION = "1.3.0";
+const INDEX_VERSION = "1.4.0";
 
 /**
  * Default file patterns to scan
@@ -326,27 +326,91 @@ function extractSymbolRefs(
  * Extract exports from file content
  */
 function extractExports(content: string): string[] {
+  const source = stripComments(content);
   const exports: string[] = [];
 
-  // Named exports
-  const namedExports = content.matchAll(
-    /export\s+(?:const|let|var|function|class|type|interface)\s+(\w+)/g
+  // Named declarations
+  const namedExports = source.matchAll(
+    /export\s+(?:default\s+)?(?:async\s+)?(?:const|let|var|function|class|type|interface|enum)\s+(\w+)/g
   );
   for (const match of namedExports) exports.push(match[1]);
 
-  // Export { ... }
-  const bracketExports = content.matchAll(/export\s*\{([^}]+)\}/g);
+  // export { a, b as B } — the PUBLIC name is after `as` when present
+  const bracketExports = source.matchAll(/export\s*(?:type\s+)?\{([^}]+)\}/g);
   for (const match of bracketExports) {
-    const names = match[1].split(",").map((n) => n.trim().split(" ")[0]);
-    exports.push(...names);
+    for (const part of match[1].split(",")) {
+      const pieces = part.trim().replace(/^type\s+/, "").split(/\s+as\s+/);
+      const name = (pieces[1] ?? pieces[0]).trim();
+      if (name) exports.push(name);
+    }
+  }
+
+  // export * as ns from "..." — the namespace is a named export
+  for (const match of source.matchAll(
+    /export\s+\*\s+as\s+(\w+)\s+from/g
+  )) {
+    exports.push(match[1]);
   }
 
   // Default export
-  if (/export\s+default/.test(content)) {
-    exports.push("default");
-  }
+  if (/export\s+default/.test(source)) exports.push("default");
 
   return [...new Set(exports.filter(Boolean))];
+}
+
+/**
+ * Module specifiers a file bare-`export *`s (barrel forwarding), so a later
+ * pass can union the target's export names into this file's.
+ */
+function extractStarReExports(content: string): string[] {
+  const source = stripComments(content);
+  const specs: string[] = [];
+  for (const match of source.matchAll(
+    /export\s+\*\s+from\s*['"]([^'"]+)['"]/g
+  )) {
+    specs.push(match[1]);
+  }
+  return specs;
+}
+
+/**
+ * Resolve `export * from "./x"` barrels by unioning each target's export names
+ * into the barrel's own — so a contract's export-exists over a barrel is
+ * correct. Iterates to a fixpoint for chained barrels (capped).
+ */
+function resolveBarrelExports(files: FileInfo[]): void {
+  const exts = [".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs"];
+  const byPath = new Map(files.map((f) => [f.relativePath, f]));
+
+  const resolve = (fromFile: string, spec: string): string | null => {
+    if (!spec.startsWith(".")) return null; // only relative barrels
+    const dir = path.posix.dirname(fromFile.replace(/\\/g, "/"));
+    const joined = path.posix
+      .normalize(path.posix.join(dir, spec))
+      .replace(/\.(tsx?|jsx?|mjs|cjs)$/, "");
+    for (const e of exts) if (byPath.has(joined + e)) return joined + e;
+    for (const e of exts)
+      if (byPath.has(`${joined}/index${e}`)) return `${joined}/index${e}`;
+    return null;
+  };
+
+  for (let pass = 0; pass < 5; pass++) {
+    let changed = false;
+    for (const file of files) {
+      for (const spec of file.starReExports ?? []) {
+        const target = resolve(file.relativePath, spec);
+        if (!target) continue;
+        for (const name of byPath.get(target)!.exports) {
+          if (name === "default") continue; // `export *` never forwards default
+          if (!file.exports.includes(name)) {
+            file.exports.push(name);
+            changed = true;
+          }
+        }
+      }
+    }
+    if (!changed) break;
+  }
 }
 
 /**
@@ -507,6 +571,7 @@ function analyzeFile(
     importBindings: extractImportBindings(content),
     importLines: extractImportLines(content),
     exports: fileExports,
+    starReExports: extractStarReExports(content),
     symbols,
     symbolRefs: extractSymbolRefs(content, fileExports),
     hooks: countHooks(content),
@@ -710,6 +775,8 @@ export async function generateIndex(options: ScanOptions = {}): Promise<RepoInde
     const info = analyzeFile(filePath, repoRoot, pkgRef);
     if (info) files.push(info);
   }
+
+  resolveBarrelExports(files);
 
   // Sort for determinism
   files.sort((a, b) => a.relativePath.localeCompare(b.relativePath));

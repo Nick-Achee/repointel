@@ -9,6 +9,8 @@ import {
   saveContextPack,
 } from "../core/slicer.js";
 import { buildDepGraph, findDependents } from "../core/dep-graph.js";
+import { generateIndex } from "../core/indexer.js";
+import { evaluateContract } from "../core/contract.js";
 import { ensureDir } from "../core/utils.js";
 
 /** The implementation surface the MCP tool needs. */
@@ -20,6 +22,8 @@ export interface Runtime {
   saveContextPack: typeof saveContextPack;
   buildDepGraph: typeof buildDepGraph;
   findDependents: typeof findDependents;
+  generateIndex: typeof generateIndex;
+  evaluateContract: typeof evaluateContract;
   ensureDir: typeof ensureDir;
   /** Where this implementation came from, for diagnostics */
   source: "bundled" | "reloaded";
@@ -35,6 +39,8 @@ const bundled: Runtime = {
   saveContextPack,
   buildDepGraph,
   findDependents,
+  generateIndex,
+  evaluateContract,
   ensureDir,
   source: "bundled",
 };
@@ -90,6 +96,8 @@ export async function loadRuntime(): Promise<Runtime> {
       "saveContextPack",
       "buildDepGraph",
       "findDependents",
+      "generateIndex",
+      "evaluateContract",
       "ensureDir",
     ];
     if (required.some((key) => typeof fresh[key] !== "function")) {

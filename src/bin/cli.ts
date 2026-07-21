@@ -134,6 +134,53 @@ program
     await startStdioServer();
   });
 
+// repointel watch - ambient freshness accelerator
+program
+  .command("watch")
+  .description("Re-index on file change (keeps the graph warm; optional live contract gate)")
+  .option("-c, --contract <file>", "Re-check a contract on every change")
+  .option("--include-tests", "Index test files too")
+  .action(async (opts: { contract?: string; includeTests?: boolean }) => {
+    const { watchCommand } = await import("../commands/watch.js");
+    await watchCommand({ contract: opts.contract, includeTests: opts.includeTests });
+  });
+
+// repointel contract - the wedge: audit intent as expected graph deltas
+const contract = program
+  .command("contract")
+  .description("Audit expected graph deltas (the intent-as-contract wedge)");
+
+contract
+  .command("check <file>")
+  .description("Evaluate a contract JSON against the current graph (exits 1 on failure)")
+  .option("-j, --json", "Machine-readable output")
+  .option("--include-tests", "Index test files too")
+  .action(async (file: string, opts: { json?: boolean; includeTests?: boolean }) => {
+    const { contractCommand } = await import("../commands/contract.js");
+    await contractCommand({ action: "check", file, json: opts.json, includeTests: opts.includeTests });
+  });
+
+contract
+  .command("snapshot")
+  .description("Capture the current graph structure for later diffing")
+  .option("-n, --name <name>", "Snapshot name", "current")
+  .option("--include-tests", "Index test files too")
+  .action(async (opts: { name?: string; includeTests?: boolean }) => {
+    const { contractCommand } = await import("../commands/contract.js");
+    await contractCommand({ action: "snapshot", name: opts.name, includeTests: opts.includeTests });
+  });
+
+contract
+  .command("diff")
+  .description("Show what appeared/vanished since a snapshot; derive an expected-delta contract")
+  .option("-n, --name <name>", "Snapshot name", "current")
+  .option("-j, --json", "Machine-readable output")
+  .option("--include-tests", "Index test files too")
+  .action(async (opts: { name?: string; json?: boolean; includeTests?: boolean }) => {
+    const { contractCommand } = await import("../commands/contract.js");
+    await contractCommand({ action: "diff", name: opts.name, json: opts.json, includeTests: opts.includeTests });
+  });
+
 // repointel ooda - Main entry point for OODA workflow
 program
   .command("ooda")

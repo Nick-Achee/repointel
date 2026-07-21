@@ -1,4 +1,6 @@
 import * as path from "node:path";
+import * as fs from "node:fs";
+import { createRequire } from "node:module";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { loadRuntime } from "./runtime.js";
@@ -17,10 +19,21 @@ Returns JSON: observe (file counts, frameworks), orient (features, task progress
 stats), decide (ranked actions), artifacts (paths to written files), and slice when seeds
 are given.`;
 
+function packageVersion(): string {
+  try {
+    const pkg = createRequire(import.meta.url)("../../package.json") as {
+      version?: string;
+    };
+    return pkg.version ?? "0.0.0";
+  } catch {
+    return "0.0.0";
+  }
+}
+
 export function createRepointelServer(): McpServer {
   const server = new McpServer({
     name: "repointel",
-    version: "0.4.1",
+    version: packageVersion(),
   });
 
   server.registerTool(
@@ -61,9 +74,17 @@ export function createRepointelServer(): McpServer {
             "Narrow impact analysis to one exported name, e.g. 'matchesPattern'. " +
               "Only files that actually import that binding count as directly affected."
           ),
+        contract: z
+          .string()
+          .optional()
+          .describe(
+            "Path to a contract JSON of expected graph deltas (file-exists, " +
+              "export-exists, edge-exists, edge-forbidden). Returns a convergent/" +
+              "absent/divergent audit — deterministic verification of intent."
+          ),
       },
     },
-    async ({ root, seeds, name, refresh, includeTests, symbol }) => {
+    async ({ root, seeds, name, refresh, includeTests, symbol, contract }) => {
       const repoRoot = root || process.cwd();
 
       try {
@@ -75,6 +96,22 @@ export function createRepointelServer(): McpServer {
           refresh,
           includeTests,
         });
+
+        // Contract audit: deterministic verification of expected graph deltas.
+        if (contract) {
+          const contractPath = path.isAbsolute(contract)
+            ? contract
+            : path.join(repoRoot, contract);
+          const raw = fs.readFileSync(contractPath, "utf-8");
+          const parsed = JSON.parse(raw);
+          const index = await rt.generateIndex({ root: repoRoot, includeTests });
+          const graph = await rt.buildDepGraph({ root: repoRoot, includeTests });
+          (payload as Record<string, unknown>).contract = rt.evaluateContract(
+            parsed,
+            index,
+            graph
+          );
+        }
 
         // Freshness is observable rather than assumed: "reloaded" means this
         // call ran the current build, not whatever existed at server spawn.
@@ -98,7 +135,11 @@ export function createRepointelServer(): McpServer {
           (payload as Record<string, unknown>).slice = {
             name: sliceName,
             seedFiles: slice.seedFiles,
+            // Ordered by personalized-PageRank relevance to the seeds.
             files: slice.files.map((f) => f.relativePath),
+            ranked: slice.files
+              .slice(0, 10)
+              .map((f) => ({ file: f.relativePath, rank: f.rank })),
             totalFiles: slice.summary.totalFiles,
             totalBytes: slice.summary.totalBytes,
             estimatedTokens: slice.summary.totalTokens,

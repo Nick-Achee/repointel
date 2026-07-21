@@ -92,6 +92,8 @@ export interface FileInfo {
   /** Line number (1-based) of each module specifier's import statement */
   importLines?: Record<string, number>;
   exports: string[];
+  /** Module specifiers this file bare-`export *`s (barrel forwarding) */
+  starReExports?: string[];
   /** Stable SCIP-style id + kind for each exported symbol (diffable across runs) */
   symbols?: SymbolInfo[];
   /** Exported symbol -> sibling exports its body references (delegation) */
@@ -228,6 +230,8 @@ export interface DepGraph {
     totalEdges: number;
     externalDeps: number;
     circularDeps: number;
+    /** True when elementary-cycle enumeration hit its cap (circularDeps is a floor) */
+    cyclesTruncated?: boolean;
     avgDepsPerFile: number;
     maxDeps: { file: string; count: number };
   };
@@ -372,6 +376,8 @@ export interface SliceFile {
   sizeBytes: number;
   depth: number;
   reason: "seed" | "import" | "layout" | "api" | "schema";
+  /** Personalized-PageRank relevance to the seeds (higher = more central) */
+  rank?: number;
 }
 
 export interface ContextSlice {

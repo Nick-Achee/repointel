@@ -16,6 +16,7 @@ import {
   readJson,
 } from "./utils.js";
 import { getIndex } from "./indexer.js";
+import { personalizedPageRank, type RankEdge } from "./rank.js";
 
 const GRAPH_VERSION = "1.0.0";
 
@@ -396,23 +397,74 @@ function cyclesInSCC(
 }
 
 /**
+ * Whether an edge only carries underscore-private bindings (Aider damps these).
+ */
+function importsOnlyPrivate(edge: DepEdge): boolean {
+  const syms = edge.symbols;
+  if (!syms || syms.length === 0) return false;
+  return syms.every((s) => s.startsWith("_"));
+}
+
+/**
+ * Rank every file in the graph by personalized PageRank from the seeds.
+ * Edge weight follows Aider: sqrt(#bindings), x0.1 when the edge carries only
+ * underscore-private names. Seed emphasis is delivered by the personalization
+ * vector inside personalizedPageRank — a per-source edge multiplier would
+ * cancel in the transition-probability normalization, so it is not applied.
+ */
+export function rankFromSeeds(
+  graph: DepGraph,
+  seeds: string[]
+): Map<string, number> {
+  const nodes = graph.nodes.map((n) => n.id);
+  const edges: RankEdge[] = graph.edges.map((e) => {
+    const refs = e.symbols?.length ?? 1;
+    let weight = Math.sqrt(Math.max(1, refs));
+    if (importsOnlyPrivate(e)) weight *= 0.1;
+    return { from: e.from, to: e.to, weight };
+  });
+  return personalizedPageRank(nodes, edges, seeds);
+}
+
+/**
  * Detect elementary cycles: Tarjan SCC to find which nodes are on cycles,
  * then per-SCC enumeration. Correct and order-independent, unlike naive
  * one-pass back-edge DFS (which misses cycles closed by cross edges).
+ *
+ * `circularNodes` is computed from SCC membership directly, so a file's
+ * circular status never depends on how many cycles some unrelated component
+ * produced. `truncated` is set when enumeration hits its cap — circularDeps is
+ * then a floor, not the exact count.
  */
-function detectCycles(edges: Map<string, string[]>): string[][] {
+function detectCycles(edges: Map<string, string[]>): {
+  cycles: string[][];
+  circularNodes: Set<string>;
+  truncated: boolean;
+} {
+  const sccs = findSCCs(edges);
+
+  // Every member of a nontrivial SCC lies on a cycle — independent of the cap.
+  const circularNodes = new Set<string>();
+  for (const scc of sccs) for (const m of scc) circularNodes.add(m);
+
   const cycles: string[][] = [];
-  for (const scc of findSCCs(edges)) {
+  let truncated = false;
+  for (const scc of sccs) {
+    if (cycles.length >= MAX_CYCLES) {
+      truncated = true;
+      break;
+    }
     if (scc.length > MAX_SCC_ENUMERATE) {
-      // Too large to enumerate cheaply — report the component itself so its
-      // members are still counted and marked circular.
+      // Too large to enumerate cheaply — report the component itself.
       cycles.push([...scc].sort());
+      truncated = true;
       continue;
     }
     cyclesInSCC(scc, edges, cycles);
-    if (cycles.length >= MAX_CYCLES) break;
   }
-  return cycles;
+  if (cycles.length >= MAX_CYCLES) truncated = true;
+
+  return { cycles, circularNodes, truncated };
 }
 
 /**
@@ -487,8 +539,8 @@ export async function buildDepGraph(options: GraphOptions = {}): Promise<DepGrap
   }
 
   // Detect cycles
-  const cycles = detectCycles(edgeMap);
-  const cycleMembers = new Set(cycles.flat());
+  const { cycles, circularNodes: cycleMembers, truncated: cyclesTruncated } =
+    detectCycles(edgeMap);
 
   // Mark circular nodes
   for (const node of nodes) {
@@ -525,6 +577,7 @@ export async function buildDepGraph(options: GraphOptions = {}): Promise<DepGrap
       totalEdges: edges.length,
       externalDeps: externalDeps.size,
       circularDeps: cycles.length,
+      cyclesTruncated,
       avgDepsPerFile: nodes.length > 0 ? edges.length / nodes.length : 0,
       maxDeps: { file: maxDepsFile, count: maxDepsCount },
     },
@@ -649,8 +702,8 @@ export async function buildDepGraphFromSeeds(
   }
 
   // Detect cycles
-  const cycles = detectCycles(edgeMap);
-  const cycleMembers = new Set(cycles.flat());
+  const { cycles, circularNodes: cycleMembers, truncated: cyclesTruncated } =
+    detectCycles(edgeMap);
 
   for (const node of nodes) {
     if (cycleMembers.has(node.id)) {
@@ -686,6 +739,7 @@ export async function buildDepGraphFromSeeds(
       totalEdges: edges.length,
       externalDeps: 0,
       circularDeps: cycles.length,
+      cyclesTruncated,
       avgDepsPerFile: nodes.length > 0 ? edges.length / nodes.length : 0,
       maxDeps: { file: maxDepsFile, count: maxDepsCount },
     },

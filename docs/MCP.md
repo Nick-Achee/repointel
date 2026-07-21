@@ -84,6 +84,7 @@ line number for each, so you can go straight to the call site.
 | `refresh` | boolean | Force a full re-index. |
 | `includeTests` | boolean | Index test/spec files too. Off by default; `observe.excludedFromIndex` always reports how many were left out. **Turn on for complete impact analysis** — test files are dependents too. |
 | `symbol` | string | Narrow impact to one exported name, e.g. `matchesPattern`. Only files that actually bind that symbol count as directly affected (namespace imports always count). |
+| `contract` | string | Path to a contract JSON of expected graph deltas. Returns a `convergent`/`absent`/`divergent` audit — deterministic verification of intent. |
 
 ## Response shape
 
@@ -140,3 +141,35 @@ re-derived from the real files, so it reports what exists, not what the agent be
 
 The `.repointel/` artifacts it writes (index, graph, context pack, decision context) are
 plain files — readable directly when the agent wants detail beyond the summary.
+
+## Contracts — auditing intent (the wedge)
+
+A feature's intent compiles to expected graph deltas, so verifying an agent's work is a
+graph check, not an opinion. A contract is JSON:
+
+```json
+{
+  "name": "password-reset",
+  "expect": [
+    { "kind": "file-exists",   "path": "src/auth/reset.ts" },
+    { "kind": "export-exists", "file": "convex/auth.ts", "symbol": "resetPassword" },
+    { "kind": "edge-exists",   "from": "src/auth/reset.ts", "to": "src/lib/mailer.ts" },
+    { "kind": "edge-forbidden","from": "src/ui/**", "to": "src/db/**" }
+  ]
+}
+```
+
+Each expectation is classified (Reflexion vocabulary): **convergent** (promised & present),
+**absent** (promised, missing), **divergent** (present but forbidden).
+
+```bash
+repointel contract check password-reset.json   # exits 1 if not satisfied (CI/hook gate)
+repointel contract snapshot --name feat         # capture graph structure
+# ... agent makes changes ...
+repointel contract diff --name feat             # what appeared/vanished; derives a contract
+```
+
+Or via the tool: `repo_intel({ contract: "password-reset.json" })` returns the audit inline.
+
+Contracts are **necessary-condition gates, not oracles** — a stub satisfies structure, so
+they layer under tests, never replace them.
