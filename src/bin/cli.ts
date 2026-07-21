@@ -14,6 +14,7 @@ import { specifyCommand } from "../commands/specify.js";
 import { oodaCommand } from "../commands/ooda.js";
 import { teachInit } from "../commands/teach.js";
 import { guardCheck } from "../commands/guard.js";
+import { planCommand } from "../commands/plan.js";
 
 const program = new Command();
 
@@ -210,6 +211,17 @@ program
       return;
     }
     await guardCheck({ json: opts.json });
+  });
+
+// repointel plan - compose a graph-grounded OODA Feature Plan for a goal
+program
+  .command("plan")
+  .description("Compose a graph-grounded OODA Feature Plan for a goal (Guide layer)")
+  .argument("<goal>", "What you want to build, e.g. \"add password reset\"")
+  .requiredOption("-s, --seeds <paths...>", "Files/directories the change touches")
+  .option("-j, --json", "Machine-readable structured plan")
+  .action(async (goal: string, opts: { seeds: string[]; json?: boolean }) => {
+    await planCommand({ goal, seeds: opts.seeds, json: opts.json });
   });
 
 // repointel ooda - Main entry point for OODA workflow
