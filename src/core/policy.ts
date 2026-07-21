@@ -1,4 +1,5 @@
 import { matchesPattern } from "./utils.js";
+import type { Expectation } from "./contract.js";
 
 export interface PolicyLabel {
   label: string;
@@ -46,4 +47,26 @@ export function resolveLabels(
     else unlabeled.push(file);
   }
   return { labelOf, unlabeled };
+}
+
+/** Expand a label->label rule into wedge expectations over the label globs. */
+export function compileRule(
+  policy: ArchitecturePolicy,
+  rule: PolicyRule
+): Expectation[] {
+  const globsFor = (label: string) =>
+    policy.labels.filter((l) => l.label === label).flatMap((l) => l.include);
+  const fromGlobs = globsFor(rule.from);
+  const toGlobs = globsFor(rule.to);
+  const out: Expectation[] = [];
+  for (const from of fromGlobs) {
+    for (const to of toGlobs) {
+      out.push(
+        rule.kind === "path"
+          ? { kind: "path-forbidden", from, to }
+          : { kind: "edge-forbidden", from, to }
+      );
+    }
+  }
+  return out;
 }
