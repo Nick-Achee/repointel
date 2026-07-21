@@ -2,7 +2,7 @@ import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { buildReorientation } from "./reorient.js";
+import { buildReorientation, renderReorientation } from "./reorient.js";
 
 let root: string;
 beforeAll(() => {
@@ -28,5 +28,16 @@ describe("buildReorientation", () => {
     expect(r.current.impact.affected).toContain("src/ui/page.ts");
     expect(r.questions.join(" ")).toMatch(/contract|domain|permission|classif/i);
     expect(r.provenance).toBe("measured");
+  });
+});
+
+describe("renderReorientation", () => {
+  it("renders the Reorientation Plan with current state and questions", async () => {
+    const r = await buildReorientation("x broke", ["src/auth/"], { root });
+    const md = renderReorientation(r);
+    expect(md).toMatch(/# Reorientation: x broke/);
+    expect(md).toMatch(/## Current state \(measured\)/);
+    expect(md).toMatch(/## Questions/);
+    expect(md).toMatch(/\?\s*$/m);
   });
 });

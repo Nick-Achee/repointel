@@ -92,6 +92,8 @@ export {
   type FeaturePlan,
   type PlanOptions,
 } from "./core/plan.js";
+export { buildDrift, renderDrift, type DriftReport } from "./core/drift.js";
+export { buildReorientation, renderReorientation, type Reorientation } from "./core/reorient.js";
 
 // Core - Route Graph
 export {

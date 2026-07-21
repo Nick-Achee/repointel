@@ -62,3 +62,24 @@ export async function buildReorientation(
     ],
   };
 }
+
+/** Render a Reorientation as Markdown (SOP §21 shape). */
+export function renderReorientation(r: Reorientation): string {
+  const lines: string[] = [];
+  lines.push(`# Reorientation: ${r.trigger}`, "");
+  lines.push("> Current state is filled from the graph; classification and the correction are yours.", "");
+  lines.push(`## Current state (${r.provenance})`, "");
+  const g = r.current.guard;
+  lines.push(`Architecture fitness: ${g.ok ? "no error-level violations" : "ERROR-level violations present"}`);
+  for (const v of g.violations.filter((x) => x.classification === "divergent"))
+    lines.push(`- ${v.severity === "error" ? "✗" : "⚠"} ${v.rule} (${v.provenance})`);
+  lines.push(
+    "",
+    `Impact of the area: ${r.current.impact.affected.length} file(s) affected ` +
+      `(${r.current.impact.direct.length} direct, ${r.current.impact.transitive.length} transitive).`,
+    ""
+  );
+  lines.push("## Questions (judgment — reorient before adding code)", "");
+  for (const q of r.questions) lines.push(`- ${q}`);
+  return lines.join("\n");
+}
