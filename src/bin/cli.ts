@@ -12,6 +12,7 @@ import { interactiveCommand } from "../commands/interactive.js";
 import { visualizeCommand } from "../commands/visualize.js";
 import { specifyCommand } from "../commands/specify.js";
 import { oodaCommand } from "../commands/ooda.js";
+import { teachInit } from "../commands/teach.js";
 
 const program = new Command();
 
@@ -179,6 +180,20 @@ contract
   .action(async (opts: { name?: string; json?: boolean; includeTests?: boolean }) => {
     const { contractCommand } = await import("../commands/contract.js");
     await contractCommand({ action: "diff", name: opts.name, json: opts.json, includeTests: opts.includeTests });
+  });
+
+// repointel teach - derive an architecture policy from the current graph
+program
+  .command("teach")
+  .description("Derive an architecture policy from the current graph (Teach layer)")
+  .argument("[action]", "action: init", "init")
+  .action(async (action: string) => {
+    if (action !== "init") {
+      console.error(`Unknown teach action: ${action}. Try: teach init`);
+      process.exitCode = 2;
+      return;
+    }
+    await teachInit({});
   });
 
 // repointel ooda - Main entry point for OODA workflow
