@@ -199,3 +199,33 @@ describe("path-forbidden expectation", () => {
     }
   });
 });
+
+describe("orphan-forbidden expectation", () => {
+  it("flags a file with no imports and no importers that is not an entrypoint", async () => {
+    const r = fs.mkdtempSync(path.join(os.tmpdir(), "repointel-orphan-"));
+    try {
+      const w = (rel: string, c: string) => {
+        const abs = path.join(r, rel);
+        fs.mkdirSync(path.dirname(abs), { recursive: true });
+        fs.writeFileSync(abs, c);
+      };
+      w("package.json", JSON.stringify({ name: "p", version: "1" }));
+      w("src/a.ts", 'import { b } from "./b";\nexport const a = b;');
+      w("src/b.ts", "export const b = 1;");
+      w("src/orphan.ts", "export const orphan = 1;"); // nothing imports it
+
+      const index = await generateIndex({ root: r });
+      const graph = await buildDepGraph({ root: r });
+
+      const res = evaluateContract(
+        { name: "t", expect: [{ kind: "orphan-forbidden", entrypoints: ["src/a.ts"] }] },
+        index, graph
+      );
+      expect(res.results[0].classification).toBe("divergent");
+      expect(res.results[0].matches).toContain("src/orphan.ts");
+      expect(res.results[0].matches).not.toContain("src/a.ts");
+    } finally {
+      fs.rmSync(r, { recursive: true, force: true });
+    }
+  });
+});

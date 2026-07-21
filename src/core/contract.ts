@@ -23,7 +23,8 @@ export type Expectation =
   | { kind: "export-exists"; file: string; symbol: string }
   | { kind: "edge-exists"; from: string; to: string }
   | { kind: "edge-forbidden"; from: string; to: string }
-  | { kind: "path-forbidden"; from: string; to: string };
+  | { kind: "path-forbidden"; from: string; to: string }
+  | { kind: "orphan-forbidden"; entrypoints?: string[] };
 
 export interface Contract {
   name: string;
@@ -154,6 +155,23 @@ export function evaluateContract(
               ? `reaches forbidden target: ${matches.join(", ")}`
               : `no path ${expectation.from} -> ${expectation.to}`,
           matches: matches.length > 0 ? matches : undefined,
+        };
+      }
+      case "orphan-forbidden": {
+        const entry = new Set(expectation.entrypoints ?? []);
+        const hasOut = new Set(graph.edges.map((e) => e.from));
+        const hasIn = new Set(graph.edges.map((e) => e.to));
+        const orphans = graph.nodes
+          .map((n) => n.id)
+          .filter((id) => !hasOut.has(id) && !hasIn.has(id) && !entry.has(id));
+        return {
+          expectation,
+          classification: orphans.length > 0 ? "divergent" : "convergent",
+          detail:
+            orphans.length > 0
+              ? `orphan modules: ${orphans.join(", ")}`
+              : "no orphan modules",
+          matches: orphans.length > 0 ? orphans : undefined,
         };
       }
       default: {
