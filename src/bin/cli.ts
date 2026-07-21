@@ -134,6 +134,17 @@ program
     await startStdioServer();
   });
 
+// repointel watch - ambient freshness accelerator
+program
+  .command("watch")
+  .description("Re-index on file change (keeps the graph warm; optional live contract gate)")
+  .option("-c, --contract <file>", "Re-check a contract on every change")
+  .option("--include-tests", "Index test files too")
+  .action(async (opts: { contract?: string; includeTests?: boolean }) => {
+    const { watchCommand } = await import("../commands/watch.js");
+    await watchCommand({ contract: opts.contract, includeTests: opts.includeTests });
+  });
+
 // repointel contract - the wedge: audit intent as expected graph deltas
 const contract = program
   .command("contract")

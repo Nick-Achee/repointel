@@ -1,0 +1,41 @@
+/**
+ * Coalesce a burst of triggers into a single asynchronous run.
+ *
+ * File watchers fire storms of events — atomic saves arrive as delete+create,
+ * a git checkout touches thousands of paths. This collapses everything within
+ * `waitMs` into one run, and never overlaps runs: a trigger that lands while a
+ * run is in flight schedules exactly one follow-up after it completes.
+ */
+export function createDebouncer(
+  fn: () => Promise<void> | void,
+  waitMs: number
+): () => void {
+  let timer: ReturnType<typeof setTimeout> | null = null;
+  let running = false;
+  let pending = false;
+
+  const run = async () => {
+    if (running) {
+      pending = true;
+      return;
+    }
+    running = true;
+    try {
+      await fn();
+    } finally {
+      running = false;
+      if (pending) {
+        pending = false;
+        run();
+      }
+    }
+  };
+
+  return () => {
+    if (timer) clearTimeout(timer);
+    timer = setTimeout(() => {
+      timer = null;
+      void run();
+    }, waitMs);
+  };
+}
