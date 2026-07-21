@@ -26,7 +26,10 @@
   "files": [
     "dist",
     "templates",
-    ".claude"
+    ".claude/commands",
+    "README.md",
+    "CHANGELOG.md",
+    "docs/MCP.md"
   ],
   "repository": {
     "type": "git",
