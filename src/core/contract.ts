@@ -16,12 +16,15 @@
 
 import type { RepoIndex, DepGraph } from "../types/index.js";
 import { matchesPattern } from "./utils.js";
+import { findDependents } from "./dep-graph.js";
 
 export type Expectation =
   | { kind: "file-exists"; path: string }
   | { kind: "export-exists"; file: string; symbol: string }
   | { kind: "edge-exists"; from: string; to: string }
-  | { kind: "edge-forbidden"; from: string; to: string };
+  | { kind: "edge-forbidden"; from: string; to: string }
+  | { kind: "path-forbidden"; from: string; to: string }
+  | { kind: "orphan-forbidden"; entrypoints?: string[] };
 
 export interface Contract {
   name: string;
@@ -130,6 +133,45 @@ export function evaluateContract(
               ? `forbidden edge present: ${matches.join(", ")}`
               : `no forbidden ${expectation.from} -> ${expectation.to} edge`,
           matches: matches.length > 0 ? matches : undefined,
+        };
+      }
+      case "path-forbidden": {
+        // Reachability: is any `to`-matching file reachable (directly or
+        // transitively) from any `from`-matching file, following imports?
+        const toNodes = graph.nodes
+          .map((n) => n.id)
+          .filter((id) => pathMatches(id, expectation.to));
+        // findDependents walks importers of `to`; a from-file that appears in
+        // that closure reaches `to`.
+        const reachers = new Set(findDependents(graph, toNodes).all);
+        const matches = graph.nodes
+          .map((n) => n.id)
+          .filter((id) => pathMatches(id, expectation.from) && reachers.has(id));
+        return {
+          expectation,
+          classification: matches.length > 0 ? "divergent" : "convergent",
+          detail:
+            matches.length > 0
+              ? `reaches forbidden target: ${matches.join(", ")}`
+              : `no path ${expectation.from} -> ${expectation.to}`,
+          matches: matches.length > 0 ? matches : undefined,
+        };
+      }
+      case "orphan-forbidden": {
+        const entry = new Set(expectation.entrypoints ?? []);
+        const hasOut = new Set(graph.edges.map((e) => e.from));
+        const hasIn = new Set(graph.edges.map((e) => e.to));
+        const orphans = graph.nodes
+          .map((n) => n.id)
+          .filter((id) => !hasOut.has(id) && !hasIn.has(id) && !entry.has(id));
+        return {
+          expectation,
+          classification: orphans.length > 0 ? "divergent" : "convergent",
+          detail:
+            orphans.length > 0
+              ? `orphan modules: ${orphans.join(", ")}`
+              : "no orphan modules",
+          matches: orphans.length > 0 ? orphans : undefined,
         };
       }
       default: {

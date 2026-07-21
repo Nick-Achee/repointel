@@ -4,6 +4,9 @@ import { createRequire } from "node:module";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { loadRuntime } from "./runtime.js";
+import { evaluateGuard } from "../core/guard.js";
+import type { ArchitecturePolicy } from "../core/policy.js";
+import { readJson } from "../core/utils.js";
 
 const TOOL_DESCRIPTION = `Get deterministic, always-current intelligence about this repository in one call.
 
@@ -67,6 +70,12 @@ export function createRepointelServer(): McpServer {
             "Index test/spec files too. Off by default; observe.excludedFromIndex " +
               "always reports how many were left out. Turn on for complete impact analysis."
           ),
+        guard: z
+          .boolean()
+          .optional()
+          .describe(
+            "Also return the architecture fitness report from .repointel/architecture.json (Guard layer)."
+          ),
         symbol: z
           .string()
           .optional()
@@ -84,7 +93,7 @@ export function createRepointelServer(): McpServer {
           ),
       },
     },
-    async ({ root, seeds, name, refresh, includeTests, symbol, contract }) => {
+    async ({ root, seeds, name, refresh, includeTests, symbol, contract, guard }) => {
       const repoRoot = root || process.cwd();
 
       try {
@@ -159,6 +168,25 @@ export function createRepointelServer(): McpServer {
             // Why each file is affected: depth, edge, bindings, import line.
             details: impact.details,
           };
+        }
+
+        if (guard) {
+          const policy = readJson<ArchitecturePolicy>(
+            path.join(repoRoot, ".repointel", "architecture.json")
+          );
+          if (policy) {
+            const gIndex = await rt.generateIndex({ root: repoRoot, includeTests });
+            const gGraph = await rt.buildDepGraph({ root: repoRoot, includeTests });
+            (payload as Record<string, unknown>).guard = evaluateGuard(
+              policy,
+              gIndex,
+              gGraph
+            );
+          } else {
+            (payload as Record<string, unknown>).guard = {
+              error: "no .repointel/architecture.json — run `repointel teach init`",
+            };
+          }
         }
 
         return {
